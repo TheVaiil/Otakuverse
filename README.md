@@ -1,0 +1,2 @@
+# Otakuverse
+Otakuverse bot
