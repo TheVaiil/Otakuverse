@@ -1,0 +1,6 @@
+discord.py
+flask
+praw
+requests
+python-dotenv
+gunicorn
