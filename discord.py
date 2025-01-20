@@ -27,6 +27,7 @@ import random
 import asyncio
 import logging
 from datetime import datetime
+import aiohttp
 
 # Logging setup
 logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -44,6 +45,8 @@ DEFAULT_ROLE_NAME = "Member"
 WARNING_LIMIT = 3
 SPAM_THRESHOLD = 5
 SPAM_TIME_LIMIT = 10
+GITHUB_API_URL = "https://github.com/TheVaiil/Otakuverse/commits/main/"  # Replace with your GitHub repo details
+CHANGELOG_CHANNEL_ID = 1331041441090109501  # Replace with your Discord changelog channel ID
 
 # Uptime tracker
 bot_start_time = datetime.utcnow()
@@ -219,7 +222,7 @@ async def copyright(ctx):
         color=discord.Color.gold()
     )
     embed.add_field(name="Copyright © 2025", value="Otakuverse Community", inline=False)
-    embed.add_field(name="Developer", value="vail", inline=False)
+    embed.add_field(name="Developer", value="[Your Discord Username]", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -237,10 +240,45 @@ async def commands(ctx):
     embed.add_field(name="!mute <user> [duration] <reason>", value="Mute a user for a specified time (admin only).", inline=False)
     await ctx.send(embed=embed)
 
+@bot.command()
+async def changelog(ctx, count: int = 5):
+    """
+    Fetch the latest commits from the GitHub repository and post them as changelogs.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Fetch commits from GitHub
+            async with session.get(GITHUB_API_URL) as response:
+                if response.status == 200:
+                    commits = await response.json()
+                    embed = discord.Embed(
+                        title="🛠️ Latest Changelog",
+                        color=discord.Color.blue()
+                    )
+                    # Limit commits to the specified count
+                    for commit in commits[:count]:
+                        commit_message = commit["commit"]["message"]
+                        commit_url = commit["html_url"]
+                        embed.add_field(
+                            name=commit_message.split("\n")[0],
+                            value=f"[View Commit]({commit_url})",
+                            inline=False
+                        )
+                    channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
+                    if channel:
+                        await channel.send(embed=embed)
+                    else:
+                        await ctx.send("Changelog channel not found.")
+                else:
+                    await ctx.send(f"Failed to fetch changelog. HTTP Status: {response.status}")
+        except Exception as e:
+            print(f"Error fetching changelog: {e}")
+            await ctx.send("An error occurred while fetching the changelog.")
+
 # Scheduled Meme Posting
 @tasks.loop(hours=1)
 async def scheduled_meme():
-    channel = bot.get_channel(1330998006979498079)
+    channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
     if channel:
         url = "https://api.imgflip.com/get_memes"
         response = requests.get(url)
