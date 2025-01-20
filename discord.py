@@ -11,7 +11,7 @@ This bot is designed for the Otakuverse Discord server. It includes features suc
 2. Random meme posting (Imgflip integration).
 3. Scheduled meme posting.
 4. Spam detection and management.
-5. Uptime tracking.d
+5. Uptime tracking.
 
 This code is intended for use only by the Otakuverse community or with explicit permission.
 
