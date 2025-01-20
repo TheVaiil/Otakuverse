@@ -11,6 +11,7 @@ This bot is designed for the Otakuverse Discord server. It includes features suc
 2. Random meme posting (Imgflip integration).
 3. Scheduled meme posting.
 4. Spam detection and management.
+5. Uptime tracking.
 
 This code is intended for use only by the Otakuverse community or with explicit permission.
 
@@ -25,6 +26,7 @@ import sqlite3
 import random
 import asyncio
 import logging
+from datetime import datetime
 
 # Logging setup
 logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -42,6 +44,9 @@ DEFAULT_ROLE_NAME = "Member"
 WARNING_LIMIT = 3
 SPAM_THRESHOLD = 5
 SPAM_TIME_LIMIT = 10
+
+# Uptime tracker
+bot_start_time = datetime.utcnow()
 
 # Temporary spam tracker
 spam_tracker = {}
@@ -196,6 +201,41 @@ async def meme(ctx):
     except Exception as e:
         print(f"Error in meme command: {e}")
         await ctx.send("❌ An error occurred while fetching memes.")
+
+@bot.command()
+async def uptime(ctx):
+    current_time = datetime.utcnow()
+    uptime_duration = current_time - bot_start_time
+    days, seconds = divmod(uptime_duration.total_seconds(), 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    await ctx.send(f"🕒 Bot Uptime: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s")
+
+@bot.command()
+async def copyright(ctx):
+    embed = discord.Embed(
+        title="Copyright Information",
+        description="This bot was developed for the Otakuverse Discord server.",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="Copyright © 2025", value="Otakuverse Community", inline=False)
+    embed.add_field(name="Developer", value="vail", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def commands(ctx):
+    embed = discord.Embed(
+        title="Available Commands",
+        description="Here are the commands you can use:",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="!meme", value="Get a random meme.", inline=False)
+    embed.add_field(name="!uptime", value="See how long the bot has been running.", inline=False)
+    embed.add_field(name="!copyright", value="View copyright information about the bot.", inline=False)
+    embed.add_field(name="!warn <user> <reason>", value="Warn a user (admin only).", inline=False)
+    embed.add_field(name="!warnings <user>", value="Check warnings for a user.", inline=False)
+    embed.add_field(name="!mute <user> [duration] <reason>", value="Mute a user for a specified time (admin only).", inline=False)
+    await ctx.send(embed=embed)
 
 # Scheduled Meme Posting
 @tasks.loop(hours=1)
