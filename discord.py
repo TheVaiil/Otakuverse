@@ -32,6 +32,7 @@ logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asc
 # Intents and bot setup
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True  # Enable message content intent
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Variables
@@ -79,17 +80,17 @@ async def on_member_join(member):
     if default_role:
         await member.add_roles(default_role)
 
-    welcome_channel = get(guild.text_channels, name=welcome)
+    welcome_channel = get(guild.text_channels, name=WELCOME_CHANNEL_NAME)
     if welcome_channel:
         await welcome_channel.send(f"🎉 Welcome to the server, {member.mention}!")
 
-    log_channel = get(guild.text_channels, name=logs)
+    log_channel = get(guild.text_channels, name=LOG_CHANNEL_NAME)
     if log_channel:
         await log_channel.send(f"✅ {member.name} joined the server.")
 
 @bot.event
 async def on_member_remove(member):
-    log_channel = get(member.guild.text_channels, name=logs)
+    log_channel = get(member.guild.text_channels, name=LOG_CHANNEL_NAME)
     if log_channel:
         await log_channel.send(f"❌ {member.name} left the server.")
 
@@ -173,6 +174,7 @@ async def mute(ctx, member: discord.Member, duration: int = 0, *, reason=None):
 # Meme Commands
 @bot.command()
 async def meme(ctx):
+    print(f"meme command triggered by {ctx.author.name}")  # Debugging line
     try:
         url = "https://api.imgflip.com/get_memes"
         response = requests.get(url)
