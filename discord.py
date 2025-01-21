@@ -1,24 +1,3 @@
-"""
-====================================================
-Otakuverse Discord Bot
-Copyright © 2025 Otakuverse Community
-Developed for the Otakuverse Discord server by [vail]
-====================================================
-
-Description:
-This bot is designed for the Otakuverse Discord server. It includes features such as:
-1. Moderation tools (warnings, mutes, bans, etc.).
-2. Random meme posting (Imgflip integration).
-3. Scheduled meme posting.
-4. Spam detection and management.
-5. Uptime tracking.
-6. Auto role assignment based on reactions.
-
-This code is intended for use only by the Otakuverse community or with explicit permission.
-
-====================================================
-"""
-
 import discord
 from discord.ext import commands, tasks
 from discord.utils import get
@@ -27,10 +6,11 @@ import sqlite3
 import random
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import aiohttp
 import os
 from dotenv import load_dotenv
+import yt_dlp as youtube_dl
 
 # Load environment variables
 load_dotenv()
@@ -46,7 +26,7 @@ if not GITHUB_TOKEN:
     exit(1)
 
 # Logging setup
-logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asctime)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, filename="moderation.log", format="%(asctime)s - %(message)s")
 
 # Intents and bot setup
 intents = discord.Intents.default()
@@ -62,11 +42,11 @@ DEFAULT_ROLE_NAME = "Member"
 WARNING_LIMIT = 3
 SPAM_THRESHOLD = 5
 SPAM_TIME_LIMIT = 10
-GITHUB_API_URL = "https://api.github.com/TheVaiil/Otakuverse/commits/main/"  # Replace with your GitHub repo details
+GITHUB_API_URL = "https://api.github.com/repos/TheVaiil/Otakuverse/commits"  # Corrected GitHub URL
 CHANGELOG_CHANNEL_ID = 1330998006979498079  # Replace with your Discord changelog channel ID
 
 # Uptime tracker
-bot_start_time = datetime.utcnow()
+bot_start_time = datetime.now(timezone.utc)
 
 # Temporary spam tracker
 spam_tracker = {}
@@ -140,9 +120,7 @@ async def on_raw_reaction_add(payload):
                 member = guild.get_member(payload.user_id)
                 if member:
                     await member.add_roles(role)
-                    channel = bot.get_channel(payload.channel_id)
-                    if channel:
-                        await channel.send(f"✅ {member.mention} has been given the {role.name} role.")
+                    logging.info(f"Role {role.name} assigned to {member.name} via reaction {emoji}.")
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -156,17 +134,14 @@ async def on_raw_reaction_remove(payload):
                 member = guild.get_member(payload.user_id)
                 if member:
                     await member.remove_roles(role)
-                    channel = bot.get_channel(payload.channel_id)
-                    if channel:
-                        await channel.send(f"❌ {member.mention} has been removed from the {role.name} role.")
-
-# Existing bot logic continues below...
+                    logging.info(f"Role {role.name} removed from {member.name} after reaction {emoji} was removed.")
 
 # Bot Events
 @bot.event
 async def on_ready():
     print(f"Bot is online as {bot.user}")
-    scheduled_meme.start()  # Start the meme posting loop
+    print(f"Connected to {len(bot.guilds)} servers.")
+    print(f"Available Commands: {list(bot.commands)}")
 
 @bot.event
 async def on_member_join(member):
@@ -194,6 +169,8 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    print(f"Message Received: {message.content}")
+
     user_id = message.author.id
     current_time = message.created_at.timestamp()
 
@@ -219,10 +196,143 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Run Bot
-async def start_bot():
-    async with bot:
-        await bot.start(DISCORD_BOT_TOKEN)
+# Music Commands
+@bot.command()
+async def play(ctx, *, query):
+    """Play a song from YouTube."""
+    if not ctx.author.voice:
+        await ctx.send("❌ You need to be in a voice channel to play music.")
+        return
 
-if __name__ == "__main__":
-    asyncio.run(start_bot())
+    voice_channel = ctx.author.voice.channel
+    if not ctx.voice_client:
+        await voice_channel.connect()
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
+        url = info['url']
+        title = info['title']
+
+    voice_client = ctx.voice_client
+    if voice_client.is_playing():
+        voice_client.stop()
+
+    voice_client.play(discord.FFmpegPCMAudio(url))
+    await ctx.send(f"🎶 Now playing: **{title}**")
+
+@bot.command()
+async def pause(ctx):
+    """Pause the current song."""
+    voice_client = ctx.voice_client
+    if not voice_client or not voice_client.is_playing():
+        await ctx.send("❌ No audio is currently playing.")
+        return
+    voice_client.pause()
+    await ctx.send("⏸ Music paused.")
+
+@bot.command()
+async def resume(ctx):
+    """Resume the paused song."""
+    voice_client = ctx.voice_client
+    if not voice_client or not voice_client.is_paused():
+        await ctx.send("❌ No music is paused.")
+        return
+    voice_client.resume()
+    await ctx.send("▶️ Resumed music.")
+
+@bot.command()
+async def stop(ctx):
+    """Stop the music and leave the channel."""
+    voice_client = ctx.voice_client
+    if not voice_client:
+        await ctx.send("❌ I'm not connected to a voice channel.")
+        return
+    voice_client.stop()
+    await ctx.voice_client.disconnect()
+    await ctx.send("🛑 Stopped music and left the voice channel.")
+
+@bot.command()
+async def leave(ctx):
+    """Leave the voice channel."""
+    voice_client = ctx.voice_client
+    if not voice_client:
+        await ctx.send("❌ I'm not connected to a voice channel.")
+        return
+    await ctx.voice_client.disconnect()
+    await ctx.send("👋 Left the voice channel.")
+
+# Commands
+@bot.command()
+async def ping(ctx):
+    """Respond with 'Pong!' to test the bot."""
+    await ctx.send("Pong!")
+
+@bot.command()
+async def bothelp(ctx):
+    """
+    List all available commands.
+    """
+    embed = discord.Embed(
+        title="Available Commands",
+        description="Here are the commands you can use:",
+        color=discord.Color.green()
+    )
+
+    for command in bot.commands:
+        embed.add_field(
+            name=f"!{command.name}",
+            value=command.help or "No description provided.",
+            inline=False
+        )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def meme(ctx):
+    """Get a random meme."""
+    try:
+        url = "https://api.imgflip.com/get_memes"
+        response = requests.get(url)
+        data = response.json()
+        if data["success"]:
+            memes = data["data"]["memes"]
+            random_meme = random.choice(memes)
+
+            embed = discord.Embed(
+                title=random_meme['name'],
+                description="Here's a random meme for you!",
+                color=discord.Color.blue()
+            )
+            embed.set_image(url=random_meme['url'])
+
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("❌ Failed to fetch memes. Please try again later.")
+    except Exception as e:
+        print(f"Error in !meme command: {e}")
+        await ctx.send("❌ An error occurred while fetching memes.")
+
+@bot.command()
+async def uptime(ctx):
+    """Show the bot's uptime."""
+    try:
+        current_time = datetime.now(timezone.utc)
+        uptime_duration = current_time - bot_start_time
+        days, seconds = divmod(uptime_duration.total_seconds(), 86400)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        await ctx.send(f"🕒 Bot Uptime: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s")
+    except Exception as e:
+        logging.error(f"Error in !uptime command: {e}")
+        await ctx.send("❌ An error occurred while calculating uptime.")
+
+# Run the bot
+bot.run(DISCORD_BOT_TOKEN)
