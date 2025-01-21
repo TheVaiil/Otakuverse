@@ -3,3 +3,6 @@ flask
 praw
 requests
 python-dotenv
+yt-dlp
+pynacl
+FFmpeg
