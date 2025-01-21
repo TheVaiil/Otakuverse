@@ -28,6 +28,15 @@ import asyncio
 import logging
 from datetime import datetime
 import aiohttp
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+if not GITHUB_TOKEN:
+    print("Error: GITHUB_TOKEN environment variable not set.")
+    exit(1)
 
 # Logging setup
 logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -222,7 +231,7 @@ async def copyright(ctx):
         color=discord.Color.gold()
     )
     embed.add_field(name="Copyright © 2025", value="Otakuverse Community", inline=False)
-    embed.add_field(name="Developer", value="[Your Discord Username]", inline=False)
+    embed.add_field(name="Developer", value="vail", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -247,8 +256,10 @@ async def changelog(ctx, count: int = 5):
     """
     async with aiohttp.ClientSession() as session:
         try:
-            # Fetch commits from GitHub
-            async with session.get(GITHUB_API_URL) as response:
+            headers = {
+                "Authorization": f"Bearer {GITHUB_TOKEN}"
+            }
+            async with session.get(GITHUB_API_URL, headers=headers) as response:
                 if response.status == 200:
                     commits = await response.json()
                     embed = discord.Embed(
@@ -301,7 +312,7 @@ async def scheduled_meme():
 # Run Bot
 async def start_bot():
     async with bot:
-        await bot.start("MTMzMDY2MjI2Mzk2NjkyNDg3Mw.GvtS5K.HdRujHFVjCdNXMJx5GhvK0PJwyGh2rzl7jm9ks")
+        await bot.start("MTMzMDY2MjI2Mzk2NjkyNDg3Mw.G4gyfw.C8-LiMHupfYAsoyGHV-tvUfZcJ2-gn43ymo5Gc")
 
 if __name__ == "__main__":
     asyncio.run(start_bot())
