@@ -18,6 +18,8 @@ This bot is designed for the Otakuverse Discord server. It includes features suc
 4. Spam detection and management.
 5. Uptime tracking.
 6. Auto role assignment based on reactions.
+7. music player
+8. 
 
 
 
