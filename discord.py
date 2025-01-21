@@ -2,7 +2,7 @@
 ====================================================
 Otakuverse Discord Bot
 Copyright © 2025 Otakuverse Community
-Developed for the Otakuverse Discord server by [Your Discord Username]
+Developed for the Otakuverse Discord server by [vail]
 ====================================================
 
 Description:
@@ -12,6 +12,7 @@ This bot is designed for the Otakuverse Discord server. It includes features suc
 3. Scheduled meme posting.
 4. Spam detection and management.
 5. Uptime tracking.
+6. Auto role assignment based on reactions.
 
 This code is intended for use only by the Otakuverse community or with explicit permission.
 
@@ -33,7 +34,13 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+if not DISCORD_BOT_TOKEN:
+    print("Error: DISCORD_BOT_TOKEN environment variable not set.")
+    exit(1)
+
 if not GITHUB_TOKEN:
     print("Error: GITHUB_TOKEN environment variable not set.")
     exit(1)
@@ -45,6 +52,7 @@ logging.basicConfig(filename="moderation.log", level=logging.INFO, format="%(asc
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True  # Enable message content intent
+intents.reactions = True  # Enable reactions intent
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Variables
@@ -54,14 +62,17 @@ DEFAULT_ROLE_NAME = "Member"
 WARNING_LIMIT = 3
 SPAM_THRESHOLD = 5
 SPAM_TIME_LIMIT = 10
-GITHUB_API_URL = "https://github.com/TheVaiil/Otakuverse/commits/"  # Replace with your GitHub repo details
-CHANGELOG_CHANNEL_ID = 1331041441090109501  # Replace with your Discord changelog channel ID
+GITHUB_API_URL = "https://api.github.com/TheVaiil/Otakuverse/commits/main/"  # Replace with your GitHub repo details
+CHANGELOG_CHANNEL_ID = 1330998006979498079  # Replace with your Discord changelog channel ID
 
 # Uptime tracker
 bot_start_time = datetime.utcnow()
 
 # Temporary spam tracker
 spam_tracker = {}
+
+# Reaction roles storage
+reaction_roles = {}
 
 # Database initialization
 def init_database():
@@ -83,6 +94,73 @@ def init_database():
         ''')
 
 init_database()
+
+# Reaction Role Commands
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def set_reaction_role(ctx, channel_id: int, message_id: int, emoji: str, role_name: str):
+    """
+    Assign a reaction to a role for a specific message.
+    Usage: !set_reaction_role <channel_id> <message_id> <emoji> <role_name>
+    """
+    channel = bot.get_channel(channel_id)
+    if not channel:
+        await ctx.send("❌ Channel not found.")
+        return
+
+    message = await channel.fetch_message(message_id)
+    if not message:
+        await ctx.send("❌ Message not found.")
+        return
+
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if not role:
+        await ctx.send("❌ Role not found.")
+        return
+
+    # Add to the reaction_roles dictionary
+    if message_id not in reaction_roles:
+        reaction_roles[message_id] = {}
+    reaction_roles[message_id][emoji] = role.id
+
+    # Add reaction to the message
+    await message.add_reaction(emoji)
+
+    await ctx.send(f"✅ Reaction role set: {emoji} -> {role.name}")
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.message_id in reaction_roles:
+        emoji = str(payload.emoji)
+        if emoji in reaction_roles[payload.message_id]:
+            guild = bot.get_guild(payload.guild_id)
+            role_id = reaction_roles[payload.message_id][emoji]
+            role = guild.get_role(role_id)
+            if role:
+                member = guild.get_member(payload.user_id)
+                if member:
+                    await member.add_roles(role)
+                    channel = bot.get_channel(payload.channel_id)
+                    if channel:
+                        await channel.send(f"✅ {member.mention} has been given the {role.name} role.")
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if payload.message_id in reaction_roles:
+        emoji = str(payload.emoji)
+        if emoji in reaction_roles[payload.message_id]:
+            guild = bot.get_guild(payload.guild_id)
+            role_id = reaction_roles[payload.message_id][emoji]
+            role = guild.get_role(role_id)
+            if role:
+                member = guild.get_member(payload.user_id)
+                if member:
+                    await member.remove_roles(role)
+                    channel = bot.get_channel(payload.channel_id)
+                    if channel:
+                        await channel.send(f"❌ {member.mention} has been removed from the {role.name} role.")
+
+# Existing bot logic continues below...
 
 # Bot Events
 @bot.event
@@ -141,178 +219,10 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Moderation Commands
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def warn(ctx, member: discord.Member, *, reason=None):
-    with sqlite3.connect('warnings.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT warning_count FROM warnings WHERE user_id = ? AND guild_id = ?', (member.id, ctx.guild.id))
-        result = cursor.fetchone()
-
-        warning_count = result[0] + 1 if result else 1
-        if result:
-            cursor.execute('UPDATE warnings SET warning_count = ? WHERE user_id = ? AND guild_id = ?', (warning_count, member.id, ctx.guild.id))
-        else:
-            cursor.execute('INSERT INTO warnings (user_id, guild_id, warning_count) VALUES (?, ?, ?)', (member.id, ctx.guild.id, 1))
-
-    await ctx.send(f"⚠️ {member.mention} has been warned. Reason: {reason}")
-    if warning_count >= WARNING_LIMIT:
-        await mute(ctx, member, duration=10, reason="Exceeded warning limit.")
-
-@bot.command()
-async def warnings(ctx, member: discord.Member):
-    with sqlite3.connect('warnings.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT warning_count FROM warnings WHERE user_id = ? AND guild_id = ?', (member.id, ctx.guild.id))
-        result = cursor.fetchone()
-
-    if result:
-        await ctx.send(f"⚠️ {member.mention} has {result[0]} warning(s).")
-    else:
-        await ctx.send(f"✅ {member.mention} has no warnings.")
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def mute(ctx, member: discord.Member, duration: int = 0, *, reason=None):
-    guild = ctx.guild
-    mute_role = get(guild.roles, name="Muted")
-    if not mute_role:
-        mute_role = await guild.create_role(name="Muted")
-        for channel in guild.channels:
-            await channel.set_permissions(mute_role, send_messages=False, speak=False)
-
-    await member.add_roles(mute_role)
-    await ctx.send(f"🤐 {member.mention} has been muted. Reason: {reason}")
-    if duration > 0:
-        await asyncio.sleep(duration * 60)
-        await member.remove_roles(mute_role)
-
-# Meme Commands
-@bot.command()
-async def meme(ctx):
-    print(f"meme command triggered by {ctx.author.name}")  # Debugging line
-    try:
-        url = "https://api.imgflip.com/get_memes"
-        response = requests.get(url)
-        data = response.json()
-        if data["success"]:
-            memes = data["data"]["memes"]
-            random_meme = random.choice(memes)
-
-            embed = discord.Embed(
-                title=random_meme['name'],
-                description="Here's a random meme for you!",
-                color=discord.Color.blue()
-            )
-            embed.set_image(url=random_meme['url'])
-
-            await ctx.send(embed=embed)
-        else:
-            await ctx.send("❌ Failed to fetch memes. Please try again later.")
-    except Exception as e:
-        print(f"Error in meme command: {e}")
-        await ctx.send("❌ An error occurred while fetching memes.")
-
-@bot.command()
-async def uptime(ctx):
-    current_time = datetime.utcnow()
-    uptime_duration = current_time - bot_start_time
-    days, seconds = divmod(uptime_duration.total_seconds(), 86400)
-    hours, seconds = divmod(seconds, 3600)
-    minutes, seconds = divmod(seconds, 60)
-    await ctx.send(f"🕒 Bot Uptime: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s")
-
-@bot.command()
-async def copyright(ctx):
-    embed = discord.Embed(
-        title="Copyright Information",
-        description="This bot was developed for the Otakuverse Discord server.",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="Copyright © 2025", value="Otakuverse Community", inline=False)
-    embed.add_field(name="Developer", value="vail", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def commands(ctx):
-    embed = discord.Embed(
-        title="Available Commands",
-        description="Here are the commands you can use:",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="!meme", value="Get a random meme.", inline=False)
-    embed.add_field(name="!uptime", value="See how long the bot has been running.", inline=False)
-    embed.add_field(name="!copyright", value="View copyright information about the bot.", inline=False)
-    embed.add_field(name="!warn <user> <reason>", value="Warn a user (admin only).", inline=False)
-    embed.add_field(name="!warnings <user>", value="Check warnings for a user.", inline=False)
-    embed.add_field(name="!mute <user> [duration] <reason>", value="Mute a user for a specified time (admin only).", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def changelog(ctx, count: int = 5):
-    """
-    Fetch the latest commits from the GitHub repository and post them as changelogs.
-    """
-    async with aiohttp.ClientSession() as session:
-        try:
-            headers = {
-                "Authorization": f"Bearer {GITHUB_TOKEN}"
-            }
-            async with session.get(GITHUB_API_URL, headers=headers) as response:
-                if response.status == 200:
-                    commits = await response.json()
-                    embed = discord.Embed(
-                        title="🛠️ Latest Changelog",
-                        color=discord.Color.blue()
-                    )
-                    # Limit commits to the specified count
-                    for commit in commits[:count]:
-                        commit_message = commit["commit"]["message"]
-                        commit_url = commit["html_url"]
-                        embed.add_field(
-                            name=commit_message.split("\n")[0],
-                            value=f"[View Commit]({commit_url})",
-                            inline=False
-                        )
-                    channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
-                    if channel:
-                        await channel.send(embed=embed)
-                    else:
-                        await ctx.send("Changelog channel not found.")
-                else:
-                    await ctx.send(f"Failed to fetch changelog. HTTP Status: {response.status}")
-        except Exception as e:
-            print(f"Error fetching changelog: {e}")
-            await ctx.send("An error occurred while fetching the changelog.")
-
-# Scheduled Meme Posting
-@tasks.loop(hours=1)
-async def scheduled_meme():
-    channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
-    if channel:
-        url = "https://api.imgflip.com/get_memes"
-        response = requests.get(url)
-        data = response.json()
-        if data["success"]:
-            memes = data["data"]["memes"]
-            random_meme = random.choice(memes)
-
-            embed = discord.Embed(
-                title=random_meme['name'],
-                description="Scheduled random meme!",
-                color=discord.Color.purple()
-            )
-            embed.set_image(url=random_meme['url'])
-
-            await channel.send(embed=embed)
-    else:
-        print("Error: Channel not found. Check YOUR_CHANNEL_ID.")
-
 # Run Bot
 async def start_bot():
     async with bot:
-        await bot.start("MTMzMDY2MjI2Mzk2NjkyNDg3Mw.G4gyfw.C8-LiMHupfYAsoyGHV-tvUfZcJ2-gn43ymo5Gc")
+        await bot.start(DISCORD_BOT_TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(start_bot())
