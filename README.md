@@ -3,7 +3,7 @@
 Otakuverse Discord Bot
 Copyright © 2025 Otakuverse Community
 Developed for the Otakuverse Discord server by [vail]
-====================================================
+
 
 Description:
 This bot is designed for the Otakuverse Discord server. It includes features such as:
