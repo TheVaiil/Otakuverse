@@ -54,7 +54,7 @@ DEFAULT_ROLE_NAME = "Member"
 WARNING_LIMIT = 3
 SPAM_THRESHOLD = 5
 SPAM_TIME_LIMIT = 10
-GITHUB_API_URL = "https://github.com/TheVaiil/Otakuverse/commits/main/"  # Replace with your GitHub repo details
+GITHUB_API_URL = "https://github.com/TheVaiil/Otakuverse/commits/"  # Replace with your GitHub repo details
 CHANGELOG_CHANNEL_ID = 1331041441090109501  # Replace with your Discord changelog channel ID
 
 # Uptime tracker
