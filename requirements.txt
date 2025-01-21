@@ -1,6 +1,5 @@
-discord.py
+discord.py==2.4.0
 flask
 praw
 requests
 python-dotenv
-gunicorn
