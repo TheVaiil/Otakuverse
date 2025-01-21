@@ -1,7 +1,12 @@
 # Otakuverse
 ====================================================
+
+
+
+
 Otakuverse Discord Bot
-Copyright © 2025 Otakuverse Community
+
+
 Developed for the Otakuverse Discord server by [vail]
 
 
@@ -13,3 +18,15 @@ This bot is designed for the Otakuverse Discord server. It includes features suc
 4. Spam detection and management.
 5. Uptime tracking.
 6. Auto role assignment based on reactions.
+
+
+
+
+
+
+
+
+
+
+
+opyright © 2025 Otakuverse Community
