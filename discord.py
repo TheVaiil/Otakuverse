@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands, tasks
 from discord.utils import get
 import requests
-import sqlite3
 import random
 import asyncio
 import logging
@@ -39,41 +38,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 WELCOME_CHANNEL_NAME = "welcome"
 LOG_CHANNEL_NAME = "moderation-log"
 DEFAULT_ROLE_NAME = "Member"
-WARNING_LIMIT = 3
-SPAM_THRESHOLD = 5
-SPAM_TIME_LIMIT = 10
-GITHUB_API_URL = "https://api.github.com/repos/TheVaiil/Otakuverse/commits"  # Corrected GitHub URL
+GITHUB_API_URL = "https://api.github.com/repos/TheVaiil/Otakuverse/commits"
 CHANGELOG_CHANNEL_ID = 1330998006979498079  # Replace with your Discord changelog channel ID
 
 # Uptime tracker
 bot_start_time = datetime.now(timezone.utc)
 
-# Temporary spam tracker
-spam_tracker = {}
-
 # Reaction roles storage
 reaction_roles = {}
-
-# Database initialization
-def init_database():
-    with sqlite3.connect('warnings.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS warnings (
-                user_id INTEGER,
-                guild_id INTEGER,
-                warning_count INTEGER
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS points (
-                user_id INTEGER,
-                guild_id INTEGER,
-                points INTEGER
-            )
-        ''')
-
-init_database()
 
 # Reaction Role Commands
 @bot.command()
@@ -140,8 +112,7 @@ async def on_raw_reaction_remove(payload):
 @bot.event
 async def on_ready():
     print(f"Bot is online as {bot.user}")
-    print(f"Connected to {len(bot.guilds)} servers.")
-    print(f"Available Commands: {list(bot.commands)}")
+    logging.info(f"Bot is online as {bot.user}")
 
 @bot.event
 async def on_member_join(member):
@@ -169,34 +140,13 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    print(f"Message Received: {message.content}")
-
-    user_id = message.author.id
-    current_time = message.created_at.timestamp()
-
-    # Track spam
-    if user_id not in spam_tracker:
-        spam_tracker[user_id] = []
-
-    spam_tracker[user_id].append(current_time)
-    spam_tracker[user_id] = [t for t in spam_tracker[user_id] if current_time - t <= SPAM_TIME_LIMIT]
-
-    if len(spam_tracker[user_id]) > SPAM_THRESHOLD:
-        mute_role = get(message.guild.roles, name="Muted")
-        if not mute_role:
-            mute_role = await message.guild.create_role(name="Muted")
-            for channel in message.guild.channels:
-                await channel.set_permissions(mute_role, send_messages=False, speak=False)
-
-        await message.author.add_roles(mute_role)
-        log_channel = get(message.guild.text_channels, name=LOG_CHANNEL_NAME)
-        if log_channel:
-            await log_channel.send(f"🚨 {message.author.name} was muted for spamming.")
-        await message.channel.send(f"⚠️ {message.author.mention} has been muted for spamming.")
+    logging.info(f"Message from {message.author}: {message.content}")
 
     await bot.process_commands(message)
 
 # Music Commands
+song_queue = []
+
 @bot.command()
 async def play(ctx, *, query):
     """Play a song from YouTube."""
@@ -212,42 +162,52 @@ async def play(ctx, *, query):
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
+            'preferredcodec': 'opus',
             'preferredquality': '192',
         }],
     }
 
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
-        url = info['url']
-        title = info['title']
+    try:
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
+            url = info['url']
+            title = info['title']
 
-    voice_client = ctx.voice_client
-    if voice_client.is_playing():
-        voice_client.stop()
+        song_queue.append((title, url))
+        if not ctx.voice_client.is_playing():
+            await play_next(ctx)
+        else:
+            await ctx.send(f"🎶 Added **{title}** to the queue.")
+    except Exception as e:
+        logging.error(f"Error in play command: {e}")
+        await ctx.send("❌ An error occurred while trying to play the song.")
 
-    voice_client.play(discord.FFmpegPCMAudio(url))
-    await ctx.send(f"🎶 Now playing: **{title}**")
+async def play_next(ctx):
+    if song_queue:
+        title, url = song_queue.pop(0)
+        ctx.voice_client.play(
+            discord.FFmpegPCMAudio(url),
+            after=lambda _: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+        )
+        await ctx.send(f"🎶 Now playing: **{title}**")
+    else:
+        await ctx.voice_client.disconnect()
 
 @bot.command()
-async def pause(ctx):
-    """Pause the current song."""
-    voice_client = ctx.voice_client
-    if not voice_client or not voice_client.is_playing():
-        await ctx.send("❌ No audio is currently playing.")
-        return
-    voice_client.pause()
-    await ctx.send("⏸ Music paused.")
+async def skip(ctx):
+    """Skip the current song."""
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("⏭ Skipped the current song.")
 
 @bot.command()
-async def resume(ctx):
-    """Resume the paused song."""
-    voice_client = ctx.voice_client
-    if not voice_client or not voice_client.is_paused():
-        await ctx.send("❌ No music is paused.")
+async def clear(ctx, amount: int = 100):
+    """Clear a specified number of messages from the channel."""
+    if not ctx.author.guild_permissions.manage_messages:
+        await ctx.send("❌ You don't have permission to clear messages.")
         return
-    voice_client.resume()
-    await ctx.send("▶️ Resumed music.")
+    deleted = await ctx.channel.purge(limit=amount)
+    await ctx.send(f"🧹 Cleared {len(deleted)} messages.", delete_after=5)
 
 @bot.command()
 async def stop(ctx):
@@ -270,7 +230,6 @@ async def leave(ctx):
     await ctx.voice_client.disconnect()
     await ctx.send("👋 Left the voice channel.")
 
-# Commands
 @bot.command()
 async def ping(ctx):
     """Respond with 'Pong!' to test the bot."""
@@ -317,7 +276,7 @@ async def meme(ctx):
         else:
             await ctx.send("❌ Failed to fetch memes. Please try again later.")
     except Exception as e:
-        print(f"Error in !meme command: {e}")
+        logging.error(f"Error in meme command: {e}")
         await ctx.send("❌ An error occurred while fetching memes.")
 
 @bot.command()
@@ -331,7 +290,7 @@ async def uptime(ctx):
         minutes, seconds = divmod(seconds, 60)
         await ctx.send(f"🕒 Bot Uptime: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s")
     except Exception as e:
-        logging.error(f"Error in !uptime command: {e}")
+        logging.error(f"Error in uptime command: {e}")
         await ctx.send("❌ An error occurred while calculating uptime.")
 
 # Run the bot
