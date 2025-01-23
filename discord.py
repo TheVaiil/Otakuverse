@@ -1,297 +1,152 @@
 import discord
-from discord.ext import commands, tasks
-from discord.utils import get
-import requests
-import random
-import asyncio
+from discord.ext import commands
+import yaml
 import logging
-from datetime import datetime, timezone
-import aiohttp
 import os
-from dotenv import load_dotenv
-import yt_dlp as youtube_dl
+from pathlib import Path
+import asyncio
+from aiocache import Cache
 
-# Load environment variables
-load_dotenv()
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+# Constants
+CONFIG_PATH = "config/config.yaml"
+LOG_DIR = "logs"
+BOT_LOG_FILE = os.path.join(LOG_DIR, "bot.log")
+ERROR_LOG_FILE = os.path.join(LOG_DIR, "error.log")
+COGS_DIR = "cogs"
 
-if not DISCORD_BOT_TOKEN:
-    print("Error: DISCORD_BOT_TOKEN environment variable not set.")
-    exit(1)
+# Ensure the logs directory exists
+Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+Path(COGS_DIR).mkdir(parents=True, exist_ok=True)
 
-if not GITHUB_TOKEN:
-    print("Error: GITHUB_TOKEN environment variable not set.")
-    exit(1)
+# Load configuration
+def load_config():
+    with open(CONFIG_PATH, "r") as file:
+        return yaml.safe_load(file)
 
-# Logging setup
-logging.basicConfig(level=logging.DEBUG, filename="moderation.log", format="%(asctime)s - %(message)s")
+config = load_config()
 
-# Intents and bot setup
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True  # Enable message content intent
-intents.reactions = True  # Enable reactions intent
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Setup Logging
+def setup_logging():
+    logger = logging.getLogger("discord_bot")
+    logger.setLevel(getattr(logging, config.get("LOG_LEVEL", "INFO").upper()))
 
-# Variables
-WELCOME_CHANNEL_NAME = "welcome"
-LOG_CHANNEL_NAME = "moderation-log"
-DEFAULT_ROLE_NAME = "Member"
-GITHUB_API_URL = "https://api.github.com/repos/TheVaiil/Otakuverse/commits"
-CHANGELOG_CHANNEL_ID = 1330998006979498079  # Replace with your Discord changelog channel ID
-
-# Uptime tracker
-bot_start_time = datetime.now(timezone.utc)
-
-# Reaction roles storage
-reaction_roles = {}
-
-# Reaction Role Commands
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def set_reaction_role(ctx, channel_id: int, message_id: int, emoji: str, role_name: str):
-    """
-    Assign a reaction to a role for a specific message.
-    Usage: !set_reaction_role <channel_id> <message_id> <emoji> <role_name>
-    """
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        await ctx.send("❌ Channel not found.")
-        return
-
-    message = await channel.fetch_message(message_id)
-    if not message:
-        await ctx.send("❌ Message not found.")
-        return
-
-    role = discord.utils.get(ctx.guild.roles, name=role_name)
-    if not role:
-        await ctx.send("❌ Role not found.")
-        return
-
-    # Add to the reaction_roles dictionary
-    if message_id not in reaction_roles:
-        reaction_roles[message_id] = {}
-    reaction_roles[message_id][emoji] = role.id
-
-    # Add reaction to the message
-    await message.add_reaction(emoji)
-
-    await ctx.send(f"✅ Reaction role set: {emoji} -> {role.name}")
-
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.message_id in reaction_roles:
-        emoji = str(payload.emoji)
-        if emoji in reaction_roles[payload.message_id]:
-            guild = bot.get_guild(payload.guild_id)
-            role_id = reaction_roles[payload.message_id][emoji]
-            role = guild.get_role(role_id)
-            if role:
-                member = guild.get_member(payload.user_id)
-                if member:
-                    await member.add_roles(role)
-                    logging.info(f"Role {role.name} assigned to {member.name} via reaction {emoji}.")
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    if payload.message_id in reaction_roles:
-        emoji = str(payload.emoji)
-        if emoji in reaction_roles[payload.message_id]:
-            guild = bot.get_guild(payload.guild_id)
-            role_id = reaction_roles[payload.message_id][emoji]
-            role = guild.get_role(role_id)
-            if role:
-                member = guild.get_member(payload.user_id)
-                if member:
-                    await member.remove_roles(role)
-                    logging.info(f"Role {role.name} removed from {member.name} after reaction {emoji} was removed.")
-
-# Bot Events
-@bot.event
-async def on_ready():
-    print(f"Bot is online as {bot.user}")
-    logging.info(f"Bot is online as {bot.user}")
-
-@bot.event
-async def on_member_join(member):
-    guild = member.guild
-    default_role = get(guild.roles, name=DEFAULT_ROLE_NAME)
-    if default_role:
-        await member.add_roles(default_role)
-
-    welcome_channel = get(guild.text_channels, name=WELCOME_CHANNEL_NAME)
-    if welcome_channel:
-        await welcome_channel.send(f"🎉 Welcome to the server, {member.mention}!")
-
-    log_channel = get(guild.text_channels, name=LOG_CHANNEL_NAME)
-    if log_channel:
-        await log_channel.send(f"✅ {member.name} joined the server.")
-
-@bot.event
-async def on_member_remove(member):
-    log_channel = get(member.guild.text_channels, name=LOG_CHANNEL_NAME)
-    if log_channel:
-        await log_channel.send(f"❌ {member.name} left the server.")
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    logging.info(f"Message from {message.author}: {message.content}")
-
-    await bot.process_commands(message)
-
-# Music Commands
-song_queue = []
-
-@bot.command()
-async def play(ctx, *, query):
-    """Play a song from YouTube."""
-    if not ctx.author.voice:
-        await ctx.send("❌ You need to be in a voice channel to play music.")
-        return
-
-    voice_channel = ctx.author.voice.channel
-    if not ctx.voice_client:
-        await voice_channel.connect()
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'opus',
-            'preferredquality': '192',
-        }],
-    }
-
-    try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
-            url = info['url']
-            title = info['title']
-
-        song_queue.append((title, url))
-        if not ctx.voice_client.is_playing():
-            await play_next(ctx)
-        else:
-            await ctx.send(f"🎶 Added **{title}** to the queue.")
-    except Exception as e:
-        logging.error(f"Error in play command: {e}")
-        await ctx.send("❌ An error occurred while trying to play the song.")
-
-async def play_next(ctx):
-    if song_queue:
-        title, url = song_queue.pop(0)
-        ctx.voice_client.play(
-            discord.FFmpegPCMAudio(url),
-            after=lambda _: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
-        )
-        await ctx.send(f"🎶 Now playing: **{title}**")
-    else:
-        await ctx.voice_client.disconnect()
-
-@bot.command()
-async def skip(ctx):
-    """Skip the current song."""
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("⏭ Skipped the current song.")
-
-@bot.command()
-async def clear(ctx, amount: int = 100):
-    """Clear a specified number of messages from the channel."""
-    if not ctx.author.guild_permissions.manage_messages:
-        await ctx.send("❌ You don't have permission to clear messages.")
-        return
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f"🧹 Cleared {len(deleted)} messages.", delete_after=5)
-
-@bot.command()
-async def stop(ctx):
-    """Stop the music and leave the channel."""
-    voice_client = ctx.voice_client
-    if not voice_client:
-        await ctx.send("❌ I'm not connected to a voice channel.")
-        return
-    voice_client.stop()
-    await ctx.voice_client.disconnect()
-    await ctx.send("🛑 Stopped music and left the voice channel.")
-
-@bot.command()
-async def leave(ctx):
-    """Leave the voice channel."""
-    voice_client = ctx.voice_client
-    if not voice_client:
-        await ctx.send("❌ I'm not connected to a voice channel.")
-        return
-    await ctx.voice_client.disconnect()
-    await ctx.send("👋 Left the voice channel.")
-
-@bot.command()
-async def ping(ctx):
-    """Respond with 'Pong!' to test the bot."""
-    await ctx.send("Pong!")
-
-@bot.command()
-async def bothelp(ctx):
-    """
-    List all available commands.
-    """
-    embed = discord.Embed(
-        title="Available Commands",
-        description="Here are the commands you can use:",
-        color=discord.Color.green()
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    for command in bot.commands:
-        embed.add_field(
-            name=f"!{command.name}",
-            value=command.help or "No description provided.",
-            inline=False
-        )
-    await ctx.send(embed=embed)
+    # Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # File Handler for general logs
+    file_handler = logging.FileHandler(BOT_LOG_FILE)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # File Handler for error logs
+    error_handler = logging.FileHandler(ERROR_LOG_FILE)
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    logger.addHandler(error_handler)
+
+    return logger
+
+logger = setup_logging()
+
+# Initialize bot
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True  # Enable if your bot needs to read message content
+intents.voice_states = True
+bot = commands.Bot(command_prefix=config.get("COMMAND_PREFIX", "!"), intents=intents)
+
+# Cache setup
+cache = Cache(Cache.MEMORY)
+
+# Helper function to cache responses
+async def get_or_set_cache(key, func, ttl=300):
+    value = await cache.get(key)
+    if value is None:
+        value = await func()
+        await cache.set(key, value, ttl=ttl)
+    return value
+
+# Error handling
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"This command is on cooldown. Try again in {round(error.retry_after, 2)} seconds.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("You are missing a required argument. Please check the command usage.")
+    else:
+        logger.error(f"Unhandled exception: {error}")
+        await ctx.send("An unexpected error occurred. Please try again later.")
+
+# Example command with rate limiting
+@bot.command()
+@commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
+async def greet(ctx):
+    """Send a greeting message."""
+    await ctx.send(f"Hello, {ctx.author.name}! How can I assist you today?")
+
+# Async file reading example
+async def async_read_file(file_path):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, Path(file_path).read_text)
+
+# Example of handling large tasks with asyncio.gather
+async def handle_large_task():
+    async def sub_task(task_id):
+        await asyncio.sleep(1)  # Simulate a time-consuming task
+        return f"Task {task_id} completed"
+
+    tasks = [sub_task(i) for i in range(10)]  # Simulate 10 concurrent tasks
+    results = await asyncio.gather(*tasks)
+    return results
 
 @bot.command()
-async def meme(ctx):
-    """Get a random meme."""
-    try:
-        url = "https://api.imgflip.com/get_memes"
-        response = requests.get(url)
-        data = response.json()
-        if data["success"]:
-            memes = data["data"]["memes"]
-            random_meme = random.choice(memes)
+async def tasks(ctx):
+    """Run multiple tasks concurrently."""
+    results = await handle_large_task()
+    await ctx.send(f"Tasks completed: {', '.join(results)}")
 
-            embed = discord.Embed(
-                title=random_meme['name'],
-                description="Here's a random meme for you!",
-                color=discord.Color.blue()
-            )
-            embed.set_image(url=random_meme['url'])
+# Graceful shutdown
+@bot.event
+async def on_shutdown():
+    logger.info("Bot is shutting down...")
+    await cache.close()
 
-            await ctx.send(embed=embed)
-        else:
-            await ctx.send("❌ Failed to fetch memes. Please try again later.")
-    except Exception as e:
-        logging.error(f"Error in meme command: {e}")
-        await ctx.send("❌ An error occurred while fetching memes.")
+# Load Cogs dynamically
+async def load_cogs():
+    for filename in os.listdir(COGS_DIR):
+        if filename.endswith(".py"):
+            cog_name = filename[:-3]  # Remove .py extension
+            try:
+                await bot.load_extension(f"cogs.{cog_name}")
+                logger.info(f"Loaded cog: {cog_name}")
+            except Exception as e:
+                logger.error(f"Failed to load cog {cog_name}: {e}")
 
+# Reload Cog Command
 @bot.command()
-async def uptime(ctx):
-    """Show the bot's uptime."""
+@commands.is_owner()
+async def reload_cog(ctx, cog: str):
+    """Reload a specific cog."""
     try:
-        current_time = datetime.now(timezone.utc)
-        uptime_duration = current_time - bot_start_time
-        days, seconds = divmod(uptime_duration.total_seconds(), 86400)
-        hours, seconds = divmod(seconds, 3600)
-        minutes, seconds = divmod(seconds, 60)
-        await ctx.send(f"🕒 Bot Uptime: {int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s")
+        await bot.unload_extension(f"cogs.{cog}")
+        await bot.load_extension(f"cogs.{cog}")
+        await ctx.send(f"Reloaded cog: {cog}")
+        logger.info(f"Reloaded cog: {cog}")
     except Exception as e:
-        logging.error(f"Error in uptime command: {e}")
-        await ctx.send("❌ An error occurred while calculating uptime.")
+        await ctx.send(f"Failed to reload cog: {cog}\n{e}")
+        logger.error(f"Failed to reload cog {cog}: {e}")
 
 # Run the bot
-bot.run(DISCORD_BOT_TOKEN)
+if __name__ == "__main__":
+    async def main():
+        async with bot:
+            await load_cogs()
+            await bot.start(config["DISCORD_TOKEN"])
+
+    asyncio.run(main())
