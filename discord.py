@@ -120,7 +120,8 @@ async def on_shutdown():
 # Load Cogs dynamically
 async def load_cogs():
     for filename in os.listdir(COGS_DIR):
-        if filename.endswith(".py"):
+        # Skip __init__.py and ensure only .py files are loaded
+        if filename.endswith(".py") and filename != "__init__.py":
             cog_name = filename[:-3]  # Remove .py extension
             try:
                 await bot.load_extension(f"cogs.{cog_name}")
@@ -145,8 +146,18 @@ async def reload_cog(ctx, cog: str):
 # Run the bot
 if __name__ == "__main__":
     async def main():
-        async with bot:
-            await load_cogs()
-            await bot.start(config["DISCORD_TOKEN"])
+        try:
+            async with bot:
+                await load_cogs()
+                await bot.start(config["DISCORD_TOKEN"])
+        except asyncio.CancelledError:
+            logger.warning("Bot was interrupted. Shutting down...")
+        except KeyboardInterrupt:
+            logger.info("Bot terminated manually. Cleaning up...")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {e}")
+        finally:
+            await bot.close()
+            logger.info("Bot has shut down.")
 
     asyncio.run(main())
