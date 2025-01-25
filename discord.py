@@ -114,7 +114,7 @@ async def tasks(ctx):
 # Graceful shutdown
 @bot.event
 async def on_shutdown():
-    logger.info("Bot is shutting down...")
+    logger.info("Bot is shutting down..")
     await cache.close()
 
 # Load Cogs dynamically
