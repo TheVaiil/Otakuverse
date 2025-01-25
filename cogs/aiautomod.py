@@ -12,8 +12,8 @@ class AIAutoMod(commands.Cog):
         self.user_warnings = defaultdict(int)  # Tracks warnings per user
         self.user_mutes = defaultdict(int)  # Tracks mutes per user
         self.blacklisted_words = ["spamword1", "spamword2"]  # Example words to block
-        self.warning_threshold = 5  # Warnings before a mute
-        self.spam_interval = 5  # Reduced timeframe for detecting spam (seconds)
+        self.warning_threshold = 3  # Warnings before a mute
+        self.spam_interval = 2  # Reduced timeframe for detecting spam (seconds)
 
         # Load configuration
         with open("config/config.yaml", "r") as config_file:
