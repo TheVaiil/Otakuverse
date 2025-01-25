@@ -1,0 +1,5 @@
+# config/config.yaml
+
+DISCORD_TOKEN: "KEY"
+COMMAND_PREFIX: "!"
+LOG_LEVEL: "DEBUG"
