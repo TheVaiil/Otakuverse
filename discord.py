@@ -7,6 +7,8 @@ from pathlib import Path
 import asyncio
 from aiocache import Cache
 
+import traceback  # For detailed error logging
+
 # Constants
 CONFIG_PATH = "config/config.yaml"
 LOG_DIR = "logs"
@@ -72,22 +74,42 @@ async def get_or_set_cache(key, func, ttl=300):
         await cache.set(key, value, ttl=ttl)
     return value
 
-# Error handling
+# Improved Error Handling
 @bot.event
 async def on_command_error(ctx, error):
+    """
+    Global error handler for commands. Catches common discord.py exceptions
+    and provides more user-friendly messages. Logs unhandled exceptions.
+    """
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"This command is on cooldown. Try again in {round(error.retry_after, 2)} seconds.")
+        # Provide a friendlier cooldown message, e.g., multiple uses allowed
+        await ctx.send(
+            f"This command is on cooldown. Try again in {round(error.retry_after, 2)} seconds."
+        )
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("You are missing a required argument. Please check the command usage.")
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send("That command does not exist. Use `!help` to see available commands.")
+    elif isinstance(error, commands.MissingPermissions):
+        missing_perms = ', '.join(error.missing_permissions)
+        await ctx.send(f"You do not have the required permissions: **{missing_perms}**.")
+    elif isinstance(error, commands.NotOwner):
+        await ctx.send("Only the bot owner can use this command.")
+    elif isinstance(error, commands.MissingRole):
+        await ctx.send(f"You need the **{error.missing_role}** role to use this command.")
+    elif isinstance(error, commands.MissingAnyRole):
+        missing_roles = ', '.join(error.missing_roles)
+        await ctx.send(f"You need at least one of the following roles: **{missing_roles}**.")
     else:
-        logger.error(f"Unhandled exception: {error}")
+        # Log the full traceback for unhandled errors
+        logger.error("Unhandled exception: %s\n%s", error, traceback.format_exc())
         await ctx.send("An unexpected error occurred. Please try again later.")
 
-# Example command with rate limiting
+# Example command with rate limiting (2 uses per 10 seconds)
 @bot.command()
-@commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
+@commands.cooldown(rate=2, per=10, type=commands.BucketType.user)
 async def greet(ctx):
-    """Send a greeting message."""
+    """Send a greeting message with a simple cooldown."""
     await ctx.send(f"Hello, {ctx.author.name}! How can I assist you today?")
 
 # Async file reading example
@@ -114,7 +136,7 @@ async def tasks(ctx):
 # Graceful shutdown
 @bot.event
 async def on_shutdown():
-    logger.info("Bot is shutting down..")
+    logger.info("Bot is shutting down...")
     await cache.close()
 
 # Load Cogs dynamically
@@ -143,6 +165,12 @@ async def reload_cog(ctx, cog: str):
         await ctx.send(f"Failed to reload cog: {cog}\n{e}")
         logger.error(f"Failed to reload cog {cog}: {e}")
 
+# BisectHosting knows the bot is online       
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}!")
+    print("Successfully startup status!")  # Required for BisectHosting panel
+
 # Run the bot
 if __name__ == "__main__":
     async def main():
@@ -151,11 +179,11 @@ if __name__ == "__main__":
                 await load_cogs()
                 await bot.start(config["DISCORD_TOKEN"])
         except asyncio.CancelledError:
-            logger.warning("Bot was interrupted. Shutting down.")
+            logger.warning("Bot was interrupted. Shutting down...")
         except KeyboardInterrupt:
-            logger.info("Bot terminated manually. Cleaning up.")
+            logger.info("Bot terminated manually. Cleaning up...")
         except Exception as e:
-            logger.error(f"An unexpected error occurred: {e}")
+            logger.error("An unexpected error occurred: %s\n%s", e, traceback.format_exc())
         finally:
             await bot.close()
             logger.info("Bot has shut down.")
