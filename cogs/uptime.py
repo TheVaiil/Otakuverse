@@ -39,8 +39,7 @@ class UptimeCog(commands.Cog):
     async def uptime_command(self, ctx: commands.Context):
         uptime_str = self.get_bot_uptime()
 
-        total_guilds = len(self.bot.guilds)
-        total_users = len(self.bot.users)  # Might be incomplete if you lack member intents
+        # Might be incomplete if you lack member intents
         py_version = platform.python_version()
         dpy_version = discord.__version__
 
