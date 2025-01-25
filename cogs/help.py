@@ -8,6 +8,9 @@ class AdvancedHelp(commands.Cog):
     @commands.command(name="helpme")
     async def show_help(self, ctx, *, command_name=None):
         """Displays a detailed help menu for all commands or a specific command."""
+        # Delete the command message to keep the channel clean
+        await ctx.message.delete()
+
         if command_name:
             command = self.bot.get_command(command_name)
             if command:
