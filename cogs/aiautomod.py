@@ -232,3 +232,76 @@ class AIAutoMod(commands.Cog):
     async def delete_recent_messages(self, channel: discord.TextChannel, author: discord.Member, limit: int):
         """
         Delete the recent `limit` messages from a specific user, including the triggering message.
+        """
+        async for msg in channel.history(limit=limit):
+            if msg.author == author:
+                try:
+                    await msg.delete()
+                except discord.NotFound:
+                    pass  # message already deleted
+
+
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def add_blacklist(self, ctx, *, word):
+        """Add a word to the blacklist and recompile the regex."""
+        self.blacklisted_words.append(word.lower())
+        self.blacklist_pattern = compile_blacklisted_regex(self.blacklisted_words)
+        await ctx.send(f"Added `{word}` to the blacklist.")
+
+
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def remove_blacklist(self, ctx, *, word):
+        """Remove a word from the blacklist and recompile the regex."""
+        self.blacklisted_words = [w for w in self.blacklisted_words if w != word.lower()]
+        self.blacklist_pattern = compile_blacklisted_regex(self.blacklisted_words)
+        await ctx.send(f"Removed `{word}` from the blacklist.")
+
+
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def show_blacklist(self, ctx):
+        """Show the current blacklist."""
+        embed = discord.Embed(title="Blacklisted Words", color=discord.Color.red())
+        if self.blacklisted_words:
+            embed.description = "\n".join([f"- {word}" for word in self.blacklisted_words])
+        else:
+            embed.description = "No blacklisted words."
+        await ctx.send(embed=embed)
+
+
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def user_status(self, ctx, member: discord.Member):
+        """
+        Check the number of warnings and mutes for a specific user.
+        Also shows how many warnings have been decayed if that feature is used often.
+        """
+        warnings = self.user_warnings.get(member.id, 0)
+        mutes = self.user_mutes.get(member.id, 0)
+
+        embed = discord.Embed(
+            title=f"User Status: {member.display_name}",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Warnings", value=warnings, inline=False)
+        embed.add_field(name="Mutes", value=mutes, inline=False)
+        await ctx.send(embed=embed)
+
+
+    @commands.command()
+    @commands.has_permissions(administrator=True)
+    async def clear_warnings(self, ctx, member: discord.Member):
+        """
+        Manually clear all warnings for a user (resets them to 0).
+        Useful if you want to pardon a user or reset after a certain time.
+        """
+        self.user_warnings[member.id] = 0
+        self.user_warning_timestamps[member.id].clear()
+        await ctx.send(f"Cleared all warnings for {member.mention}.")
+
+
+async def setup(bot: commands.Bot):
+    """Properly load the AIAutoMod cog."""
+    await bot.add_cog(AIAutoMod(bot))
