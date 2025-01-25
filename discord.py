@@ -151,9 +151,9 @@ if __name__ == "__main__":
                 await load_cogs()
                 await bot.start(config["DISCORD_TOKEN"])
         except asyncio.CancelledError:
-            logger.warning("Bot was interrupted. Shutting down......")
+            logger.warning("Bot was interrupted. Shutting down.")
         except KeyboardInterrupt:
-            logger.info("Bot terminated manually. Cleaning up...")
+            logger.info("Bot terminated manually. Cleaning up.")
         except Exception as e:
             logger.error(f"An unexpected error occurred: {e}")
         finally:
