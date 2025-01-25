@@ -5,7 +5,7 @@ from collections import defaultdict
 import openai
 import yaml
 
-class AIAutoModCog(commands.Cog):
+class AIAutoMod(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.user_message_count = defaultdict(list)  # Tracks message timestamps per user
@@ -65,7 +65,7 @@ class AIAutoModCog(commands.Cog):
         """Use AI to detect toxicity in a message."""
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4-turbo",
                 messages=[
                     {"role": "system", "content": "You are a toxicity detection system."},
                     {"role": "user", "content": f"Is the following message toxic? '{message.content}'"}
