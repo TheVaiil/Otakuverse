@@ -47,30 +47,30 @@ def setup_logging() -> logging.Logger:
     logger = logging.getLogger("discord_bot")
     logger.setLevel(getattr(logging, config.get("LOG_LEVEL", "INFO").upper()))
     
-    # Clear existing handlers to prevent duplicates during reloads
-    if logger.handlers:
-        for handler in logger.handlers:
-            logger.removeHandler(handler)
+    # Prevent propagation to root logger
+    logger.propagate = False
 
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    # Only add handlers if none exist
+    if not logger.handlers:
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
 
-    # Console Handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+        # Console Handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
 
-    # Regular File Handler
-    file_handler = logging.FileHandler(BOT_LOG_FILE)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+        # Regular File Handler
+        file_handler = logging.FileHandler(BOT_LOG_FILE)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
-    # Error-specific File Handler
-    error_handler = logging.FileHandler(ERROR_LOG_FILE)
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(formatter)
-    logger.addHandler(error_handler)
+        # Error-specific File Handler
+        error_handler = logging.FileHandler(ERROR_LOG_FILE)
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(formatter)
+        logger.addHandler(error_handler)
 
     return logger
 
@@ -172,7 +172,7 @@ async def on_ready() -> None:
     print(f"Logged in as {bot.user}!\nSuccessfully startup status!")  # BisectHosting requirement
 
 async def main() -> None:
-    """Main entry point with improved resource management."""
+    """Main entry point with proper signal handling."""
     if "DISCORD_TOKEN" not in config:
         logger.critical("Missing DISCORD_TOKEN in configuration")
         raise SystemExit(1)
@@ -186,6 +186,9 @@ async def main() -> None:
     except Exception as e:
         logger.critical("Fatal error: %s", e, exc_info=True)
     finally:
+        if not bot.is_closed():
+            logger.info("Closing bot connection...")
+            await bot.close()
         logger.info("Closing resources...")
         await cache.close()
         logger.info("Bot shutdown complete")
