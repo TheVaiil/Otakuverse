@@ -107,7 +107,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
         commands.MissingRequiredArgument: "Missing required argument. Check command usage.",
         commands.CommandNotFound: "Command not found. Use !help for available commands.",
         commands.MissingPermissions: lambda e: f"Required permissions: {', '.join(e.missing_permissions)}",
-        commands.NotOwner: "This command is restricted to the bot owner.",
+        commands.NotOwner: "This command is restricted to the bot owner..",
         commands.MissingRole: lambda e: f"Required role: {e.missing_role}",
         commands.MissingAnyRole: lambda e: f"Requires one of: {', '.join(e.missing_roles)}"
     }
