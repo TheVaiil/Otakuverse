@@ -4,3 +4,7 @@ DISCORD_TOKEN: "KEY"
 COMMAND_PREFIX: "!"
 LOG_LEVEL: "DEBUG"
 OPENAI_API_KEY:
+# Voice configuration
+voice_creator:
+  category_id: ID  # Optional existing category ID
+  max_channels: 30         # Prevent channel spam
