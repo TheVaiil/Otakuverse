@@ -2,14 +2,24 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
-from typing import Optional  # Added missing import
+from typing import Optional
+from discord.ext.commands import FlagConverter, flag  # Added FlagConverter
+
+class VoiceFlags(FlagConverter):
+    name: str = flag(
+        default="Custom Voice",
+        description="Name for the voice channel"
+    )
+    limit: int = flag(
+        default=0,
+        description="User limit (0 = unlimited)"
+    )
 
 class VoiceCreator(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_channels = {}
         self.config = getattr(bot, "config", {}).get("voice_creator", {})
-        
         self.voice_cleanup.start()
 
     @tasks.loop(minutes=5)
@@ -25,15 +35,13 @@ class VoiceCreator(commands.Cog):
                     pass
 
     @commands.hybrid_command()
-    @app_commands.describe(name="Channel name", limit="User limit (0 for unlimited)")
-    async def voice(self, ctx, name: str = "Custom Voice", limit: int = 0):
+    async def voice(self, ctx, flags: VoiceFlags):
         """Create a temporary voice channel"""
-        category = await self._get_category(ctx.guild)
-        
         try:
+            category = await self._get_category(ctx.guild)
             channel = await ctx.guild.create_voice_channel(
-                name=name,
-                user_limit=limit,
+                name=flags.name,
+                user_limit=flags.limit,
                 category=category,
                 reason=f"Temporary channel by {ctx.author}"
             )
@@ -43,30 +51,22 @@ class VoiceCreator(commands.Cog):
                 "created_at": discord.utils.utcnow()
             }
             
-            await ctx.send(f"🎧 Voice channel created: {channel.mention}", delete_after=30)
-            
-        except discord.HTTPException as e:
+            await ctx.send(
+                f"🎧 Created voice channel: {channel.mention}\n"
+                f"Name: `{flags.name}` | Limit: `{flags.limit or 'Unlimited'}`",
+                delete_after=30
+            )
+
+        except discord.HTTPException:
             await ctx.send("❌ Failed to create channel", delete_after=10)
 
     async def _get_category(self, guild: discord.Guild) -> Optional[discord.CategoryChannel]:
         category_id = self.config.get("category_id")
         if category_id:
             return guild.get_channel(category_id)
-        
-        # Create category if not exists
         return await guild.create_category("Temporary Channels")
 
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        """Handle private channel permissions"""
-        if after.channel and after.channel.id in self.active_channels:
-            channel_data = self.active_channels[after.channel.id]
-            if channel_data["owner"] == member.id:
-                await after.channel.set_permissions(
-                    member, 
-                    manage_channels=True,
-                    move_members=True
-                )
+  
 
 async def setup(bot):
     await bot.add_cog(VoiceCreator(bot))
