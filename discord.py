@@ -10,7 +10,7 @@ import traceback
 from typing import Any, Callable, Awaitable
 
 # Constants
-CONFIG_PATH = "config/config.yaml"
+CONFIG_PATH = os.getenv("CONFIG_PATH", "config/config.yaml")
 LOG_DIR = "logs"
 BOT_LOG_FILE = os.path.join(LOG_DIR, "bot.log")
 ERROR_LOG_FILE = os.path.join(LOG_DIR, "error.log")
@@ -32,13 +32,23 @@ def load_config() -> dict:
     """Load configuration from YAML file."""
     try:
         with open(CONFIG_PATH, "r") as file:
-            return yaml.safe_load(file)
+            config = yaml.safe_load(file)
+            validate_config(config)
+            return config
     except FileNotFoundError:
         pre_logger.error("Config file not found at %s", CONFIG_PATH)
         raise SystemExit(1)
     except yaml.YAMLError as e:
         pre_logger.error("Error parsing config file: %s", e)
         raise SystemExit(1)
+
+def validate_config(config: dict) -> None:
+    """Validate the configuration file."""
+    required_keys = ["DISCORD_TOKEN", "COMMAND_PREFIX", "LOG_LEVEL"]
+    for key in required_keys:
+        if key not in config:
+            pre_logger.error("Missing required config key: %s", key)
+            raise SystemExit(1)
 
 config = load_config()
 
@@ -85,7 +95,7 @@ intents.voice_states = True
 bot = commands.Bot(
     command_prefix=config.get("COMMAND_PREFIX", "!"),
     intents=intents,
-    help_command=None  # Consider implementing custom help command
+    help_command=None  # Custom help command will be loaded as a cog
 )
 
 # Cache setup
@@ -107,7 +117,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
         commands.MissingRequiredArgument: "Missing required argument. Check command usage.",
         commands.CommandNotFound: "Command not found. Use !help for available commands.",
         commands.MissingPermissions: lambda e: f"Required permissions: {', '.join(e.missing_permissions)}",
-        commands.NotOwner: "This command is restricted to the bot owner..",
+        commands.NotOwner: "This command is restricted to the bot owner.",
         commands.MissingRole: lambda e: f"Required role: {e.missing_role}",
         commands.MissingAnyRole: lambda e: f"Requires one of: {', '.join(e.missing_roles)}"
     }
@@ -173,14 +183,15 @@ async def on_ready() -> None:
 
 async def main() -> None:
     """Main entry point with proper signal handling."""
-    if "DISCORD_TOKEN" not in config:
+    discord_token = config.get("DISCORD_TOKEN")
+    if not discord_token:
         logger.critical("Missing DISCORD_TOKEN in configuration")
         raise SystemExit(1)
 
     try:
         async with bot:
             await load_cogs()
-            await bot.start(config["DISCORD_TOKEN"])
+            await bot.start(discord_token)
     except KeyboardInterrupt:
         logger.info("Bot shutdown initiated by keyboard interrupt")
     except Exception as e:
