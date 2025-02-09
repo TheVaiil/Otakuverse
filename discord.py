@@ -53,7 +53,7 @@ def validate_config(config: dict) -> None:
 config = load_config()
 
 def setup_logging() -> logging.Logger:
-    """Configure logging handlers and formatters."""
+    """Configure logging handlers and formatters.."""
     logger = logging.getLogger("discord_bot")
     logger.setLevel(getattr(logging, config.get("LOG_LEVEL", "INFO").upper()))
     
