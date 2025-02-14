@@ -1,6 +1,6 @@
 # Otak Discord bot
 
-A robust, modular, and scalable Discord bot built with discord.py. Featuring comprehensive logging, error handling, and a flexible architecture, MyDiscordBot is designed to provide seamless functionality for music playback, user leveling, moderation, and more. Whether you’re managing a small community or a large server, this bot ensures reliability and ease of maintenance.
+A robust, modular, and scalable Discord bot built with discord.py. Featuring comprehensive logging, error handling, and a flexible architecture, Otak is designed to provide seamless functionality for music playback, user leveling, moderation, and more. Whether you’re managing a small community or a large server, this bot ensures reliability and ease of maintenance.
 
 ## 📋 Table of Contents
 - [Features](#-features)
@@ -33,4 +33,4 @@ A robust, modular, and scalable Discord bot built with discord.py. Featuring com
 
 ## 📂 Project Structure
 
-A well-organized project structure enhances maintainability and scalability. Here’s the recommended layout for MyDiscordBot:
+A well-organized project structure enhances maintainability and scalability. Here’s the recommended layout for Otak:
