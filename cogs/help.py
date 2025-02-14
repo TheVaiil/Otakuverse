@@ -1,80 +1,120 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 class AdvancedHelp(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.command(name="helpme")
-    async def show_help(self, ctx, *, command_name=None):
-        """Displays a detailed help menu for all commands or a specific command."""
-        # Delete the command message to keep the channel clean
-        await ctx.message.delete()
-
+    
+    @app_commands.command(name="helpme", description="Show detailed help information")
+    @app_commands.describe(command_name="Specific command to get help for")
+    async def help_command(self, interaction: discord.Interaction, command_name: str = None):
+        """Slash command for displaying help information"""
         if command_name:
-            command = self.bot.get_command(command_name)
+            # Find specific command
+            command = self.bot.tree.get_command(command_name)
             if command:
-                if not self._can_access_command(ctx, command):
-                    await ctx.author.send("You don't have permission to view this command.")
+                if not self._can_access_command(interaction, command):
+                    await interaction.response.send_message(
+                        "⛔ You don't have permission to view this command.",
+                        ephemeral=True
+                    )
                     return
+                
                 embed = self._generate_command_embed(command)
-                await ctx.author.send(embed=embed)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
             else:
-                await ctx.author.send(f"Command `{command_name}` not found.")
+                await interaction.response.send_message(
+                    f"❌ Command `{command_name}` not found.",
+                    ephemeral=True
+                )
         else:
-            embed = self._generate_all_commands_embed(ctx)
-            await ctx.author.send(embed=embed)
+            # Show all available commands
+            embed = self._generate_all_commands_embed(interaction)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    def _generate_all_commands_embed(self, ctx):
-        """Generates an embed for all available commands."""
+    def _generate_all_commands_embed(self, interaction: discord.Interaction) -> discord.Embed:
+        """Generate embed showing all accessible commands"""
         embed = discord.Embed(
-            title="Help - Available Commands",
-            description="Use `!helpme <command>` to get detailed information about a specific command.",
-            color=discord.Color.blue()
+            title="📚 Bot Command Help",
+            description="Use `/helpme [command]` for detailed command information",
+            color=0x00ff00
         )
 
+        # Organize commands by cog
         for cog_name, cog in self.bot.cogs.items():
-            command_list = "\n".join([
-                f"**`!{command.name}`** - {command.help}"
-                for command in cog.get_commands()
-                if command.help and self._can_access_command(ctx, command)
-            ])
-            if command_list:
-                embed.add_field(name=cog_name, value=command_list, inline=False)
+            if cog_name == "AdvancedHelp":  # Skip help cog itself
+                continue
 
-        embed.set_footer(text="Use !helpme <command> for more details about each command.")
+            # Get slash commands from cog
+            commands = cog.get_app_commands() if hasattr(cog, 'get_app_commands') else []
+            accessible_commands = [
+                f"• `/{cmd.name}` - {cmd.description}"
+                for cmd in commands
+                if self._can_access_command(interaction, cmd)
+            ]
+
+            if accessible_commands:
+                embed.add_field(
+                    name=f"**{cog_name}**",
+                    value="\n".join(accessible_commands),
+                    inline=False
+                )
+
+        embed.set_footer(text="🔒 Restricted commands require special permissions")
         return embed
 
-    def _generate_command_embed(self, command):
-        """Generates an embed for a specific command."""
+    def _generate_command_embed(self, command: app_commands.Command) -> discord.Embed:
+        """Generate detailed embed for a specific command"""
         embed = discord.Embed(
-            title=f"Help - {command.name}",
-            description=command.help or "No description provided.",
-            color=discord.Color.green()
+            title=f"📖 Command Help: /{command.name}",
+            description=command.description or "No description available",
+            color=0x0099ff
         )
 
-        if command.aliases:
-            embed.add_field(name="Aliases", value=", ".join(command.aliases), inline=False)
+        # Add parameters if any
+        if command.parameters:
+            params = []
+            for param in command.parameters:
+                required = "Required" if param.required else "Optional"
+                param_info = f"`{param.name}` ({required})"
+                if param.description:
+                    param_info += f": {param.description}"
+                params.append(param_info)
+            
+            embed.add_field(
+                name="🔧 Parameters",
+                value="\n".join(params) or "No parameters",
+                inline=False
+            )
 
-        if command.usage:
-            embed.add_field(name="Usage", value=f"`!{command.name} {command.usage}`", inline=False)
-        else:
-            embed.add_field(name="Usage", value=f"`!{command.name}`", inline=False)
+        # Add permissions notice
+        if self._is_restricted_command(command):
+            embed.add_field(
+                name="⚠️ Permissions",
+                value="This command requires special privileges",
+                inline=False
+            )
 
-        embed.set_footer(text="<> indicates required arguments, [] indicates optional arguments.")
         return embed
 
-    def _can_access_command(self, ctx, command):
-        """Checks if the user has access to a command based on their roles."""
-        # Define staff roles that can access restricted commands
-        staff_roles = {"Admin", "discord moderator", "Staff"}
-        user_roles = {role.name for role in ctx.author.roles}
+    def _can_access_command(self, interaction: discord.Interaction, command: app_commands.Command) -> bool:
+        """Check if user has access to a command"""
+        # Check for restricted cogs
+        if self._is_restricted_command(command):
+            return self._has_staff_role(interaction.user)
+        return True
 
-        # If the command is in a restricted cog (e.g., AIAutoMod), limit access
-        if command.cog_name == "AIAutoMod":
-            return bool(staff_roles & user_roles)  # User must have at least one staff role
+    def _is_restricted_command(self, command: app_commands.Command) -> bool:
+        """Check if command belongs to a restricted cog"""
+        if command.binding and command.binding.qualified_name == "AIAutoMod":
+            return True
+        return False
 
-        return True  # Allow access to all other commands
+    def _has_staff_role(self, user: discord.Member) -> bool:
+        """Check if user has staff role"""
+        staff_roles = {"Admin", "Discord Moderator", "Staff"}
+        return any(role.name in staff_roles for role in user.roles)
 
 async def setup(bot):
     await bot.add_cog(AdvancedHelp(bot))
