@@ -1,154 +1,138 @@
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands
 from yt_dlp import YoutubeDL
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import asyncio
+import random
+from collections import deque
+from typing import Literal
 
-# Spotify configuration (if needed)
+# Spotify configuration
 SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
-if SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET:
-    sp_client = spotipy.Spotify(
-        client_credentials_manager=SpotifyClientCredentials(
-            client_id=SPOTIPY_CLIENT_ID,
-            client_secret=SPOTIPY_CLIENT_SECRET
-        )
-    )
-else:
-    sp_client = None  # Spotify support disabled if credentials are missing
+sp_client = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+    client_id=SPOTIPY_CLIENT_ID,
+    client_secret=SPOTIPY_CLIENT_SECRET
+)) if SPOTIPY_CLIENT_ID and SPOTIPY_CLIENT_SECRET else None
 
-# Updated yt_dlp options for better quality streams
 YDL_OPTIONS = {
-    'format': 'bestaudio[abr>=128]/bestaudio',
-    'noplaylist': False  # Allow playlists
+    'format': 'bestaudio[ext=webm]/bestaudio',
+    'noplaylist': False,
+    'quiet': True,
+    'default_search': 'ytsearch',
+    'extract_flat': 'in_playlist',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }]
 }
 
-# Enhanced FFmpeg options
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -ar 48000 -ac 2 -b:a 256k -c:a libopus -loglevel error'
+    'options': '-vn -filter:a "volume=0.75"'
 }
 
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.queues = {}  # Dictionary to hold song queues per guild
-        self.sp = sp_client  # Spotify client (if available)
+        self.queues = {}  # {guild_id: deque}
+        self.now_playing = {}
+        self.volume = 0.75
+        self.sp = sp_client
 
-    async def ensure_voice(self, ctx):
-        """Ensure the command user is in a voice channel and connect if necessary."""
-        if not ctx.author.voice:
-            await ctx.send("You need to join a voice channel first!")
+    async def ensure_voice(self, interaction: discord.Interaction):
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You need to join a voice channel first!", ephemeral=True)
             return False
-        if ctx.guild.voice_client is None:
+            
+        vc = interaction.guild.voice_client
+        if not vc:
             try:
-                await ctx.author.voice.channel.connect()
-            except discord.errors.ClientException:
-                await ctx.send("I'm already connected to a voice channel!")
-                return False
-            except discord.errors.PermissionDenied:
-                await ctx.send("I don't have permission to join that voice channel.")
-                return False
+                await interaction.user.voice.channel.connect()
             except Exception as e:
-                await ctx.send(f"An error occurred while connecting: {e}")
+                await interaction.response.send_message(f"❌ Couldn't connect: {e}", ephemeral=True)
                 return False
+        elif vc.channel != interaction.user.voice.channel:
+            await interaction.response.send_message("❌ I'm in another voice channel!", ephemeral=True)
+            return False
+            
         return True
 
-    async def play_next(self, ctx):
-        """Play the next song in the queue and ensure continuous playback."""
-        if ctx.guild.id in self.queues and self.queues[ctx.guild.id]:
-            url, title = self.queues[ctx.guild.id].pop(0)
-            ctx.guild.voice_client.play(
-                discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS),
-                after=lambda e: self.bot.loop.call_soon_threadsafe(asyncio.create_task, self.play_next(ctx))
-            )
-            await ctx.send(embed=discord.Embed(description=f"Now playing: **{title}**", color=discord.Color.blue()))
-        else:
-            await asyncio.sleep(300)  # Wait 5 minutes before disconnecting
-            if ctx.guild.voice_client and not ctx.guild.voice_client.is_playing():
-                await ctx.guild.voice_client.disconnect()
+    async def play_next(self, interaction: discord.Interaction):
+        try:
+            if not interaction.guild.voice_client or not self.queues.get(interaction.guild.id):
+                return
 
-    @commands.command()
-    async def play(self, ctx, *, search: str):
-        """Play a song or playlist while starting playback immediately."""
-        if not await self.ensure_voice(ctx):
+            url, title = self.queues[interaction.guild.id].popleft()
+            self.now_playing[interaction.guild.id] = title
+
+            source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
+            source = discord.PCMVolumeTransformer(source, self.volume)
+
+            def after_playback(error):
+                if error:
+                    print(f"Playback error: {error}")
+                asyncio.run_coroutine_threadsafe(self.play_next(interaction), self.bot.loop)
+
+            interaction.guild.voice_client.play(source, after=after_playback)
+            await self.send_now_playing(interaction, title, url)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ Playback error: {e}", ephemeral=True)
+
+    async def send_now_playing(self, interaction, title, url):
+        embed = discord.Embed(title="🎶 Now Playing", description=f"[{title}]({url})", color=discord.Color.blue())
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="play", description="Play music from YouTube or Spotify")
+    @app_commands.describe(query="Song name, URL, or Spotify link")
+    async def play(self, interaction: discord.Interaction, query: str):
+        await interaction.response.defer()
+        
+        if not await self.ensure_voice(interaction):
             return
-
-        if ctx.guild.id not in self.queues:
-            self.queues[ctx.guild.id] = []
 
         try:
+            if interaction.guild.id not in self.queues:
+                self.queues[interaction.guild.id] = deque()
+                self.now_playing[interaction.guild.id] = None
+
+            if not query.startswith(('http://', 'https://')):
+                query = f"ytsearch:{query}"
+
             with YoutubeDL(YDL_OPTIONS) as ydl:
-                info = ydl.extract_info(search, download=False)
-                if 'entries' in info:
-                    first_song = info['entries'][0]
-                    self.queues[ctx.guild.id].append((first_song['url'], first_song['title']))
-                    await ctx.send(embed=discord.Embed(description=f"Now playing: **{first_song['title']}**", color=discord.Color.blue()))
-                    
-                    if not ctx.guild.voice_client.is_playing():
-                        await self.play_next(ctx)
-                    
-                    for entry in info['entries'][1:]:
-                        self.queues[ctx.guild.id].append((entry['url'], entry['title']))
-                    await ctx.send(embed=discord.Embed(description=f"Added {len(info['entries'])} songs to queue!", color=discord.Color.green()))
+                info = ydl.extract_info(query, download=False)
+                
+                if 'entries' in info and info['entries']:
+                    first_entry = info['entries'][0]
+                    self.queues[interaction.guild.id].append((first_entry['url'], first_entry['title']))
+                    await interaction.followup.send(f"✅ Added **{first_entry['title']}** to queue!")
+                elif 'url' in info and 'title' in info:
+                    self.queues[interaction.guild.id].append((info['url'], info['title']))
+                    await interaction.followup.send(f"✅ Added **{info['title']}** to queue!")
                 else:
-                    self.queues[ctx.guild.id].append((info['url'], info['title']))
-                    await ctx.send(embed=discord.Embed(description=f"Added to queue: **{info['title']}**", color=discord.Color.green()))
+                    await interaction.followup.send("❌ No valid results found.", ephemeral=True)
+                    return
+
+            if not interaction.guild.voice_client.is_playing():
+                await self.play_next(interaction)
+                
         except Exception as e:
-            await ctx.send(f"Error fetching video: {e}")
-            return
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
-        if ctx.guild.voice_client and not ctx.guild.voice_client.is_playing():
-            await self.play_next(ctx)
-
-    @commands.command()
-    async def skip(self, ctx):
-        """Skip the current song."""
-        if ctx.guild.voice_client and ctx.guild.voice_client.is_playing():
-            ctx.guild.voice_client.stop()
-            await ctx.send(embed=discord.Embed(description="Skipped the song.", color=discord.Color.orange()))
-            if not self.queues[ctx.guild.id]:
-                await ctx.guild.voice_client.disconnect()
-
-    @commands.command()
-    async def stop(self, ctx):
-        """Stop playback, clear the queue, and disconnect from voice."""
-        if ctx.guild.voice_client:
-            self.queues[ctx.guild.id] = []
-            await ctx.guild.voice_client.disconnect()
-            await ctx.send(embed=discord.Embed(description="Stopped playback and disconnected.", color=discord.Color.red()))
-
-    @commands.command()
-    async def queue(self, ctx):
-        """Display the current song queue."""
-        if ctx.guild.id in self.queues and self.queues[ctx.guild.id]:
-            queue_list = "\n".join([f"{i+1}. {song[1]}" for i, song in enumerate(self.queues[ctx.guild.id])])
-            await ctx.send(f"Current Queue:\n{queue_list}")
+    @app_commands.command(name="skip", description="Skip current song")
+    async def skip(self, interaction: discord.Interaction):
+        vc = interaction.guild.voice_client
+        if vc and vc.is_playing():
+            vc.stop()
+            await interaction.response.send_message("⏭️ Skipped current song")
+            await self.play_next(interaction)
         else:
-            await ctx.send("The queue is empty.")
-
-    @commands.command()
-    async def spplay(self, ctx, *, track_name: str):
-        """Search and play a song from Spotify."""
-        if self.sp is None:
-            await ctx.send("Spotify integration is disabled.")
-            return
-        results = self.sp.search(track_name, limit=1)
-        track = results['tracks']['items'][0]
-        url = f"https://open.spotify.com/track/{track['id']}"
-        title = track['name']
-        
-        # Add the song to the queue and play it
-        if ctx.guild.id not in self.queues:
-            self.queues[ctx.guild.id] = []
-        self.queues[ctx.guild.id].append((url, title))
-        
-        await ctx.send(embed=discord.Embed(description=f"Added to queue: **{title}**", color=discord.Color.green()))
-        
-        if not ctx.guild.voice_client.is_playing():
-            await self.play_next(ctx)
+            await interaction.response.send_message("❌ Nothing is playing", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
