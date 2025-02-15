@@ -41,7 +41,8 @@ class CommunityChallenges(commands.Cog):
 
         channel = self.bot.get_channel(challenge['channel_id'])
         if channel:
-            await channel.send(f"Challenge `{challenge['name']}` has ended! Here is the final leaderboard:\n{self.generate_leaderboard(challenge)}")
+            embed = self.create_leaderboard_embed(challenge)
+            await channel.send(embed=embed)
 
     @app_commands.command(name="start_challenge", description="Start a new community challenge")
     @app_commands.default_permissions(manage_guild=True)
@@ -61,7 +62,8 @@ class CommunityChallenges(commands.Cog):
         }
         self.save_challenges()
 
-        await interaction.response.send_message(f"Challenge `{name}` has started and will end in {duration}!")
+        embed = self.create_challenge_embed(self.active_challenges[str(interaction.guild.id)])
+        await interaction.response.send_message(embed=embed)
         await asyncio.create_task(self.schedule_recap(interaction.guild.id, (end_time - datetime.utcnow()).total_seconds()))
     
     async def schedule_recap(self, guild_id: int, delay: float):
@@ -83,6 +85,21 @@ class CommunityChallenges(commands.Cog):
         if not participants:
             return "No participants yet!"
         return "\n".join(f"{idx + 1}. {self.bot.get_user(int(user_id)).display_name if self.bot.get_user(int(user_id)) else 'Unknown'} - {data['progress']}/{challenge['goal'] or '∞'}" for idx, (user_id, data) in enumerate(participants))[:1024]
+    
+    def create_leaderboard_embed(self, challenge: dict) -> discord.Embed:
+        embed = discord.Embed(title=f"Challenge Complete: {challenge['name']}", color=0x00ff00)
+        leaderboard = self.generate_leaderboard(challenge)
+        embed.add_field(name="Final Leaderboard", value=leaderboard, inline=False)
+        return embed
+    
+    def create_challenge_embed(self, challenge: dict) -> discord.Embed:
+        embed = discord.Embed(title=f"New Challenge: {challenge['name']}", color=0x5865F2)
+        embed.add_field(name="Type", value=challenge['type'].capitalize(), inline=True)
+        embed.add_field(name="Ends In", value=f"<t:{int(challenge['end_time'])}:R>", inline=True)
+        if challenge['goal']:
+            embed.add_field(name="Goal", value=str(challenge['goal']), inline=False)
+        embed.set_footer(text="Use /join_challenge to participate!")
+        return embed
     
     def cog_unload(self):
         self.challenge_cleanup.cancel()
