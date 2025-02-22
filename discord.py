@@ -7,6 +7,14 @@ import os
 from pathlib import Path
 import asyncio
 
+# Optional: Use uvloop for improved performance on UNIX systems.
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    logging.info("Using uvloop for improved performance.")
+except ImportError:
+    logging.info("uvloop not installed, using default asyncio event loop.")
+
 # Constants
 CONFIG_PATH = os.getenv("CONFIG_PATH", "config/config.yaml")
 LOG_DIR = "logs"
@@ -66,7 +74,7 @@ class SlashBot(commands.Bot):
     """
     A subclass of commands.Bot to initialize a bot with slash commands.
     """
-    def __init__(self):
+    def __init__(self) -> None:
         # A dummy prefix is required but unused when using slash commands.
         super().__init__(
             command_prefix="!",
@@ -74,7 +82,7 @@ class SlashBot(commands.Bot):
             help_command=None  # Disable the default help command
         )
 
-    async def setup_hook(self):
+    async def setup_hook(self) -> None:
         """
         Called before the bot connects to Discord.
         Loads all cog extensions and synchronizes the slash command tree.
@@ -82,7 +90,7 @@ class SlashBot(commands.Bot):
         await self.load_cogs()
         await self.tree.sync()
 
-    async def load_cogs(self):
+    async def load_cogs(self) -> None:
         """
         Dynamically load all cog extensions from the COGS directory.
 
@@ -103,7 +111,7 @@ class SlashBot(commands.Bot):
 bot = SlashBot()
 
 @bot.event
-async def on_ready():
+async def on_ready() -> None:
     """
     Event handler called when the bot is ready.
     Logs the bot's username and ID.
@@ -112,7 +120,7 @@ async def on_ready():
     print(f"Logged in as {bot.user}!")
 
 @bot.tree.command(name="greet", description="Send a greeting")
-async def greet(interaction: discord.Interaction):
+async def greet(interaction: discord.Interaction) -> None:
     """
     Slash command to send a greeting to the user.
 
@@ -122,7 +130,7 @@ async def greet(interaction: discord.Interaction):
     await interaction.response.send_message(f"Hello {interaction.user.mention}! Ready to help.")
 
 @bot.tree.command(name="reload_cog", description="Reload a specific cog (owner only)")
-async def reload_cog(interaction: discord.Interaction, cog: str):
+async def reload_cog(interaction: discord.Interaction, cog: str) -> None:
     """
     Slash command to reload a specific cog extension.
     Only the bot owner is permitted to execute this command.
@@ -145,7 +153,7 @@ async def reload_cog(interaction: discord.Interaction, cog: str):
         await interaction.response.send_message(f"Failed to reload cog: {e}", ephemeral=True)
 
 @bot.event
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
     """
     Global error handler for slash commands.
     Logs the error and sends a generic error message to the user.
@@ -160,7 +168,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         await interaction.response.send_message("An error occurred while processing your command.", ephemeral=True)
 
-async def main():
+async def main() -> None:
     """
     Main entry point for running the bot.
 
@@ -172,9 +180,7 @@ async def main():
         if not discord_token:
             logger.critical("Missing DISCORD_TOKEN in configuration")
             raise SystemExit(1)
-
         await bot.start(discord_token)
-
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt. Shutting down...")
     except Exception as e:
