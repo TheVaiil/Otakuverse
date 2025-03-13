@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 from mcstatus import JavaServer
 
 class MinecraftStatusCog(commands.Cog):
@@ -9,29 +10,38 @@ class MinecraftStatusCog(commands.Cog):
         self.server_ip = "51.77.35.232"
         self.server_port = 25565  # Default Minecraft port
 
-    @commands.command(name="mcstatus", help="Check if the Minecraft server is online.")
-    async def mcstatus(self, ctx):
+    @app_commands.command(name="mcstatus", description="Check Minecraft server online status")
+    async def mcstatus(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         server = JavaServer.lookup(f"{self.server_ip}:{self.server_port}")
 
         try:
             status = server.status()
             embed = discord.Embed(
-                title="✅ Server Online!",
+                title=f"🟢 Server Online",
+                description=f"Your Minecraft server is online and running smoothly!",
                 color=discord.Color.green()
             )
-            embed.add_field(name="IP Address", value=self.server_ip, inline=False)
-            embed.add_field(name="Players Online", value=f"{status.players.online}/{status.players.max}", inline=True)
-            embed.add_field(name="Version", value=status.version.name, inline=True)
-            embed.set_footer(text="Minecraft Server Status")
+            embed.add_field(name="🌐 IP Address", value=f"`{self.server_ip}:{self.server_port}`", inline=False)
+            embed.add_field(name="👥 Players Online", value=f"**{status.players.online} / {status.players.max}**", inline=True)
+            embed.add_field(name="📌 Version", value=f"`{status.version.name}`", inline=True)
+            embed.set_footer(text="✅ Server is up and running")
+
         except Exception as e:
             embed = discord.Embed(
-                title="❌ Server Offline!",
-                description=f"Server `{self.server_ip}` appears to be offline.",
+                title="🔴 Server Offline",
+                description=f"It seems your Minecraft server isn't reachable at the moment.",
                 color=discord.Color.red()
             )
-            embed.set_footer(text="Minecraft Server Status")
+            embed.add_field(name="🌐 IP Address", value=f"`{self.server_ip}:{self.server_port}`", inline=False)
+            embed.set_footer(text="⚠️ Server currently offline")
 
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        await self.bot.tree.sync()
+        print("MinecraftStatusCog Slash Commands Synced")
 
 async def setup(bot):
     await bot.add_cog(MinecraftStatusCog(bot))
