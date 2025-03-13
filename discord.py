@@ -173,7 +173,7 @@ async def main() -> None:
     Main entry point for running the bot.
 
     Retrieves the Discord token from the configuration and starts the bot.
-    Handles keyboard interrupts and ensures the bot is properly shut down.
+    Handles keyboard interrupts and ensures the bot is properly shut down..
     """
     try:
         discord_token = config.get("DISCORD_TOKEN")
