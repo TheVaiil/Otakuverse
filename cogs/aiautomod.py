@@ -5,11 +5,20 @@ import re
 import asyncio
 import openai
 import logging
+import nltk
 from collections import deque, defaultdict
 from datetime import datetime, timedelta
 from functools import lru_cache
+from langdetect import detect
+import aiofiles
 
-# Configure logging
+# Ensure necessary NLTK data is downloaded
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -31,29 +40,30 @@ class AutoMod(commands.Cog):
     async def load_blacklist(self):
         """Loads the blacklist words from a file asynchronously."""
         try:
-            async with aiofiles.open("blacklist.txt", "r") as f:
+            async with aiofiles.open("blacklist.txt", "r", encoding="utf-8") as f:
                 self.blacklist = {line.strip().lower() for line in await f.readlines() if line.strip()}
             self.update_blacklist_pattern()
         except FileNotFoundError:
             logger.warning("Blacklist file not found. Creating an empty one.")
-            async with aiofiles.open("blacklist.txt", "w") as f:
+            async with aiofiles.open("blacklist.txt", "w", encoding="utf-8") as f:
                 pass
 
     def update_blacklist_pattern(self):
-        """Update regex pattern for blacklist words."""
+        """Update regex pattern for blacklist words (supports Unicode characters)."""
         if self.blacklist:
-            self.blacklist_pattern = re.compile(r"\b(" + "|".join(map(re.escape, self.blacklist)) + r")\b", re.IGNORECASE)
+            words = [re.escape(word) for word in self.blacklist]
+            self.blacklist_pattern = re.compile(r"\b(" + "|".join(words) + r")\b", re.IGNORECASE | re.UNICODE)
         else:
             self.blacklist_pattern = None
 
     @lru_cache(maxsize=500)
     async def check_toxicity(self, message_content: str):
-        """Check message toxicity using OpenAI GPT with caching."""
+        """Check message toxicity using OpenAI's Moderation API with caching."""
         try:
             response = await openai.ChatCompletion.acreate(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "Classify the following message as 'toxic' or 'safe':"},
+                    {"role": "system", "content": "Analyze the following message and return 'toxic' or 'safe' in any language:"},
                     {"role": "user", "content": message_content}
                 ],
                 max_tokens=10
@@ -99,6 +109,16 @@ class AutoMod(commands.Cog):
                         logger.info(f"Unmuted {member.name}")
             del self.muted_users[user_id]
 
+    def preprocess_text(self, text):
+        """Tokenizes and normalizes text (language-agnostic)."""
+        try:
+            language = detect(text)
+        except:
+            language = "unknown"
+
+        words = nltk.word_tokenize(text, language=language if language in nltk.corpus.stopwords.fileids() else "english")
+        return " ".join(words).lower()
+
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot or message.content.startswith(self.bot.command_prefix):
@@ -116,45 +136,18 @@ class AutoMod(commands.Cog):
                 await self.mute_user(message, duration=15)
             return
 
-        # Blacklist filtering
-        if self.blacklist_pattern and self.blacklist_pattern.search(message.content):
+        # Blacklist filtering (multilingual)
+        processed_content = self.preprocess_text(message.content)
+        if self.blacklist_pattern and self.blacklist_pattern.search(processed_content):
             await message.delete()
             await message.channel.send(f"{message.author.mention}, your message contained blacklisted words.", delete_after=10)
             return
 
-        # Toxicity detection
+        # Toxicity detection (multilingual)
         if await self.check_toxicity(message.content):
             await message.delete()
             await message.channel.send(f"{message.author.mention}, please avoid toxic language.", delete_after=10)
             return
-
-    @app_commands.command(name="add_blacklist", description="Add a word to the blacklist")
-    @app_commands.default_permissions(manage_messages=True)
-    async def add_blacklist(self, interaction: discord.Interaction, word: str):
-        """Adds a word to the blacklist (Mod only)"""
-        word = word.lower()
-        if word not in self.blacklist:
-            self.blacklist.add(word)
-            async with aiofiles.open("blacklist.txt", "a") as f:
-                await f.write(word + "\n")
-            self.update_blacklist_pattern()
-            await interaction.response.send_message(f"Added `{word}` to the blacklist.", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"`{word}` is already in the blacklist.", ephemeral=True)
-
-    @app_commands.command(name="remove_blacklist", description="Remove a word from the blacklist")
-    @app_commands.default_permissions(manage_messages=True)
-    async def remove_blacklist(self, interaction: discord.Interaction, word: str):
-        """Removes a word from the blacklist (Mod only)"""
-        word = word.lower()
-        if word in self.blacklist:
-            self.blacklist.remove(word)
-            async with aiofiles.open("blacklist.txt", "w") as f:
-                await f.write("\n".join(self.blacklist))
-            self.update_blacklist_pattern()
-            await interaction.response.send_message(f"Removed `{word}` from the blacklist.", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"`{word}` is not in the blacklist.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(AutoMod(bot))
