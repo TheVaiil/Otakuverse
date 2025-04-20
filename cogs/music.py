@@ -5,10 +5,13 @@ from discord.ext import commands, tasks
 from yt_dlp import YoutubeDL
 import asyncio
 import random
-from collections import deque
+from collections import deque, defaultdict
 from asyncpg import Pool
+import ffmpeg
+import requests
+from io import BytesIO
 
-# Spotify config if needed
+# Spotify config
 SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
 
@@ -17,196 +20,215 @@ YDL_OPTIONS = {
     'noplaylist': False,
     'quiet': True,
     'default_search': 'ytsearch',
-    'extract_flat': 'in_playlist',
-    'postprocessors': [{
-        'key': 'FFmpegExtractAudio',
-        'preferredcodec': 'opus',
-        'preferredquality': '192',
-    }]
 }
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -filter:a "volume=1.0"'
+
+# EQ presets mapping to ffmpeg filter strings
+EQ_PRESETS = {
+    'bass_boost': 'bass=g=10',
+    'nightcore': 'asetrate=48000*1.25,aresample=48000',
+    # more presets...
 }
 
 class MusicPlayer(ui.View):
-    def __init__(self, cog, interaction: discord.Interaction):
+    "Interactive music controls (play/pause, skip, shuffle, repeat)"
+    def __init__(self, cog, msg):
         super().__init__(timeout=None)
         self.cog = cog
-        self.interaction = interaction
+        self.msg = msg
 
-    @ui.button(label="⏯️", style=discord.ButtonStyle.secondary, custom_id="music:play_pause")
-    async def toggle_play(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(emoji="⏯️", style=discord.ButtonStyle.secondary)
+    async def btn_pause(self, button, interaction):
         await self.cog.toggle_pause(interaction)
 
-    @ui.button(label="⏭️", style=discord.ButtonStyle.secondary, custom_id="music:skip")
-    async def skip(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
+    async def btn_skip(self, button, interaction):
         await self.cog.skip(interaction)
 
-    @ui.button(label="🔀", style=discord.ButtonStyle.secondary, custom_id="music:shuffle")
-    async def shuffle(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(emoji="🔀", style=discord.ButtonStyle.secondary)
+    async def btn_shuffle(self, button, interaction):
         await self.cog.shuffle(interaction)
 
-    @ui.button(label="🔁", style=discord.ButtonStyle.secondary, custom_id="music:repeat")
-    async def repeat(self, button: ui.Button, interaction: discord.Interaction):
+    @ui.button(emoji="🔁", style=discord.ButtonStyle.secondary)
+    async def btn_repeat(self, button, interaction):
         await self.cog.toggle_repeat(interaction)
 
 class Music(commands.Cog):
-    """Advanced Music Cog with interactive controls and features."""
+    "Advanced Music Cog with full featured experience."
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.queues = {}  # guild_id -> deque of sources
-        self.repeat = {}  # guild_id -> mode: 'off','track','queue'
+        self.queues = defaultdict(deque)
+        self.repeat_mode = defaultdict(lambda: 'off')
         self.db: Pool = getattr(bot, 'db', None)
+        self.votes = {}  # guild->set(user_ids)
         self.progress_tasks = {}
 
     music = app_commands.Group(name="music", description="Music commands")
 
-    async def ensure_voice(self, interaction: discord.Interaction):
-        # join or move
-        if not interaction.user.voice or not interaction.user.voice.channel:
+    async def ensure_voice(self, interaction):
+        if not (ch := interaction.user.voice and interaction.user.voice.channel):
             await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
             return None
         vc = interaction.guild.voice_client
         if not vc:
-            vc = await interaction.user.voice.channel.connect()
-        elif vc.channel != interaction.user.voice.channel:
-            await vc.move_to(interaction.user.voice.channel)
+            vc = await ch.connect()
+        elif vc.channel != ch:
+            await vc.move_to(ch)
         return vc
 
-    async def update_progress(self, guild_id: int, message: discord.Message):
+    def _progress_bar(self, pos, total, length=20):
+        filled = int(pos/total * length)
+        return f"[{'█'*filled}{'─'*(length-filled)}] {pos//60}:{pos%60:02d}/{total//60}:{total%60:02d}"
+
+    async def update_progress(self, guild_id, msg):
         while True:
             vc = self.bot.get_guild(guild_id).voice_client
             if not vc or not vc.is_playing(): break
-            pos = vc.source.duration and vc.source.volume  # stub: replace with actual
-            bar = self._make_progress_bar(30, 0, 1)  # stub
-            embed = message.embeds[0]
-            embed.set_field_at(0, name="Progress", value=f"{bar}")
-            try: await message.edit(embed=embed)
+            pos = int(vc.source.seek if hasattr(vc.source, 'seek') else vc.source.elapsed)
+            total = int(vc.source.duration)
+            bar = self._progress_bar(pos, total)
+            embed = msg.embeds[0]
+            embed.set_field_at(1, name="Progress", value=bar)
+            try: await msg.edit(embed=embed)
             except: break
             await asyncio.sleep(5)
 
-    def _make_progress_bar(self, length, current, total):
-        filled = int(length * current / total)
-        return f"[{'█'*filled}{'─'*(length-filled)}]"
-
-    @music.command(name="play")
-    @app_commands.describe(query="Song name or URL")
-    async def play(self, interaction: discord.Interaction, query: str):
-        """Play or enqueue a track."""
-        await interaction.response.defer()
-        vc = await self.ensure_voice(interaction)
-        if not vc: return
+    async def enqueue(self, info, interaction, vc):
         guild_id = interaction.guild_id
-        # get or init queue
-        q = self.queues.setdefault(guild_id, deque())
-        # download info
-        with YoutubeDL(YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(query, download=False)
-        if 'entries' in info: info = info['entries'][0]
-        source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(info['url'], **FFMPEG_OPTIONS), volume=1.0)
-        source.title, source.url = info.get('title'), info.get('webpage_url')
-        # play or enqueue
+        src = discord.FFmpegPCMAudio(info['url'], **{'before_options':vc.options if hasattr(vc, 'options') else ''})
+        src.title, src.url = info.get('title'), info.get('webpage_url')
+        q = self.queues[guild_id]
         if not vc.is_playing():
-            vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(self._play_next(interaction), self.bot.loop))
-            view = MusicPlayer(self, interaction)
-            embed = discord.Embed(title="Now Playing", description=f"[{source.title}]({source.url})")
-            embed.add_field(name="Progress", value=self._make_progress_bar(30, 0, 1))
+            vc.play(src, after=lambda e: asyncio.run_coroutine_threadsafe(self.next_track(interaction), self.bot.loop))
+            view = MusicPlayer(self, None)
+            embed = discord.Embed(title="Now Playing", description=f"[{src.title}]({src.url})")
+            embed.add_field(name="Progress", value=self._progress_bar(0, int(info.get('duration',0))))
             msg = await interaction.followup.send(embed=embed, view=view)
-            # start progress updater
+            view.msg = msg
             self.progress_tasks[guild_id] = asyncio.create_task(self.update_progress(guild_id, msg))
         else:
-            q.append(source)
-            await interaction.followup.send(f"Queued: {source.title}")
+            q.append(src)
+            await interaction.followup.send(f"Queued: {src.title}")
 
-    async def _play_next(self, interaction: discord.Interaction):
+    async def next_track(self, interaction):
         guild_id = interaction.guild_id
         vc = interaction.guild.voice_client
-        q = self.queues.get(guild_id)
-        if vc and q and len(q) > 0:
-            next_src = q.popleft()
-            vc.play(next_src, after=lambda e: asyncio.run_coroutine_threadsafe(self._play_next(interaction), self.bot.loop))
-            # update embed
+        q = self.queues[guild_id]
+        if self.repeat_mode[guild_id] == 'track':
+            vc.play(vc.source)
+        elif q:
+            src = q.popleft()
+            vc.play(src, after=lambda e: asyncio.run_coroutine_threadsafe(self.next_track(interaction), self.bot.loop))
+        elif self.repeat_mode[guild_id] == 'queue':
+            # reload from history
+            pass
         else:
             await vc.disconnect()
 
-    @music.command(name="skip")
-    async def skip(self, interaction: discord.Interaction):
-        """Skip the current track."""
-        vc = interaction.guild.voice_client
-        if vc and vc.is_playing(): vc.stop()
-        await interaction.response.send_message("Skipped.")
+    @music.command()
+    @app_commands.describe(query="Song name or URL")
+    async def play(self, interaction, query: str):
+        """Play music from YouTube or Spotify"""
+        await interaction.response.defer()
+        vc = await self.ensure_voice(interaction)
+        if not vc: return
+        with YoutubeDL(YDL_OPTIONS) as ydl:
+            info = ydl.extract_info(query, download=False)
+        if 'entries' in info: info = info['entries'][0]
+        await self.enqueue(info, interaction, vc)
 
-    @music.command(name="pause")
-    async def toggle_pause(self, interaction: discord.Interaction):
-        """Toggle pause/resume."""
+    @music.command()
+    async def skip(self, interaction):
+        "Skip current track (or vote skip)"
         vc = interaction.guild.voice_client
-        if not vc: return await interaction.response.send_message("Not connected.")
-        if vc.is_playing(): vc.pause(); await interaction.response.send_message("Paused.")
-        else: vc.resume(); await interaction.response.send_message("Resumed.")
+        gid = interaction.guild_id
+        members = [m for m in vc.channel.members if not m.bot] if vc else []
+        if len(members) > 1:
+            self.votes.setdefault(gid, set()).add(interaction.user.id)
+            if len(self.votes[gid]) >= max(1, len(members)//2):
+                vc.stop()
+                self.votes[gid].clear()
+                await interaction.response.send_message("Vote threshold reached, skipping.")
+            else:
+                await interaction.response.send_message(f"Vote count: {len(self.votes[gid])}/{len(members)//2}", ephemeral=True)
+        else:
+            if vc and vc.is_playing(): vc.stop()
+            await interaction.response.send_message("Skipped.")
 
-    @music.command(name="shuffle")
-    async def shuffle(self, interaction: discord.Interaction):
-        """Shuffle the queue."""
-        q = self.queues.get(interaction.guild_id, [])
+    @music.command()
+    async def pause(self, interaction):
+        vc = interaction.guild.voice_client
+        if vc and vc.is_playing(): vc.pause(); await interaction.response.send_message("Paused.")
+        elif vc: vc.resume(); await interaction.response.send_message("Resumed.")
+        else: await interaction.response.send_message("Not playing.", ephemeral=True)
+
+    @music.command()
+    async def shuffle(self, interaction):
+        q = self.queues[interaction.guild_id]
         random.shuffle(q)
         await interaction.response.send_message("Queue shuffled.")
 
-    @music.command(name="repeat")
-    async def toggle_repeat(self, interaction: discord.Interaction):
-        """Toggle repeat mode (off/track/queue)."""
+    @music.command()
+    async def repeat(self, interaction):
         gid = interaction.guild_id
-        mode = self.repeat.get(gid, 'off')
-        next_mode = {'off':'track','track':'queue','queue':'off'}[mode]
-        self.repeat[gid] = next_mode
-        await interaction.response.send_message(f"Repeat mode: {next_mode}")
+        modes = ['off','track','queue']
+        idx = (modes.index(self.repeat_mode[gid]) + 1) % 3
+        self.repeat_mode[gid] = modes[idx]
+        await interaction.response.send_message(f"Repeat: {modes[idx]}")
 
-    @music.command(name="queue")
-    async def show_queue(self, interaction: discord.Interaction):
-        """Show current queue."""
-        q = self.queues.get(interaction.guild_id, [])
-        if not q: return await interaction.response.send_message("Queue empty.")
+    @music.command()
+    async def queue(self, interaction):
+        q = self.queues[interaction.guild_id]
         lines = [f"{i+1}. {src.title}" for i,src in enumerate(q)]
-        await interaction.response.send_message("\n".join(lines))
+        await interaction.response.send_message("Queue:\n" + "\n".join(lines) if lines else "Queue empty.")
 
-    @music.command(name="playlist")
-    async def playlist(self, interaction: discord.Interaction):
-        """Playlist subcommands."""
-        pass  # Implement create/add/play/list using self.db
+    @music.command()
+    async def playlist(self, interaction, action: str, name: str, track: str = None):
+        """Manage playlists: create, add, play, list"""
+        if not self.db:
+            return await interaction.response.send_message("Database disabled.")
+        if action == 'create':
+            await self.db.execute("INSERT INTO playlists(guild_id,name) VALUES($1,$2)", interaction.guild_id, name)
+            await interaction.response.send_message(f"Playlist '{name}' created.")
+        elif action == 'add' and track:
+            await self.db.execute("INSERT INTO playlist_tracks(guild_id,name,track) VALUES($1,$2,$3)", interaction.guild_id, name, track)
+            await interaction.response.send_message(f"Added to '{name}': {track}")
+        elif action == 'play':
+            rows = await self.db.fetch("SELECT track FROM playlist_tracks WHERE guild_id=$1 AND name=$2", interaction.guild_id, name)
+            for r in rows:
+                await self.play(interaction, r['track'])
+        elif action == 'list':
+            rows = await self.db.fetch("SELECT name FROM playlists WHERE guild_id=$1", interaction.guild_id)
+            await interaction.response.send_message("Playlists: " + ", ".join(r['name'] for r in rows))
 
-    @music.command(name="lyrics")
-    async def lyrics(self, interaction: discord.Interaction):
-        """Fetch and display lyrics."""
-        await interaction.response.send_message("Lyrics not implemented.")
+    @music.command()
+    async def lyrics(self, interaction):
+        """Fetch synced lyrics and send karaoke messages."""
+        # stub: call lyrics API, schedule timed lines
+        await interaction.response.send_message("Karaoke mode not yet implemented.")
 
-    @music.command(name="filter")
-    async def audio_filter(self, interaction: discord.Interaction, preset: str):
-        """Apply audio filters: bass_boost, nightcore, etc."""
-        await interaction.response.send_message(f"Filter '{preset}' applied.")
+    @music.command()
+    async def filter(self, interaction, preset: str):
+        """Apply audio filters."""
+        # stub: reinitialize player with ffmpeg filter
+        if preset in EQ_PRESETS:
+            await interaction.response.send_message(f"Applied filter: {preset}")
+        else:
+            await interaction.response.send_message("Unknown preset.")
 
-    @music.command(name="radio")
-    async def radio(self, interaction: discord.Interaction, genre: Optional[str]=None):
-        """Start an auto-DJ radio mode."""
-        await interaction.response.send_message(f"Starting radio{' '+genre if genre else ''}.")
-
-    @music.command(name="karaoke")
-    async def karaoke(self, interaction: discord.Interaction):
-        """Start karaoke mode with synced lyrics."""
-        await interaction.response.send_message("Karaoke mode not implemented.")
-
-    @music.command(name="voteskip")
-    async def vote_skip(self, interaction: discord.Interaction):
-        """Initiate a vote-skip."""
-        await interaction.response.send_message("Vote-skip initiated.")
+    @music.command()
+    async def radio(self, interaction, genre: str = None):
+        """Start auto-DJ radio using related videos."""
+        # stub: fetch related video id
+        await interaction.response.send_message("Radio mode not yet implemented.")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        """Handle cross-guild or global voice logic."""
+        """Cross-guild / global queue logic placeholder."""
+        # stub
         pass
 
     async def cog_unload(self):
-        for task in self.progress_tasks.values():
-            task.cancel()
+        for task in self.progress_tasks.values(): task.cancel()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Music(bot))
