@@ -1,120 +1,113 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
+from discord import app_commands
 
-class AdvancedHelp(commands.Cog):
-    def __init__(self, bot):
+# This is the View that holds the dropdown menu
+class HelpView(discord.ui.View):
+    def __init__(self, bot: commands.Bot):
+        super().__init__(timeout=180)  # The view will be disabled after 180 seconds of inactivity
         self.bot = bot
-    
-    @app_commands.command(name="helpme", description="Show detailed help information")
-    @app_commands.describe(command_name="Specific command to get help for")
-    async def help_command(self, interaction: discord.Interaction, command_name: str = None):
-        """Slash command for displaying help information"""
-        if command_name:
-            # Find specific command
-            command = self.bot.tree.get_command(command_name)
-            if command:
-                if not self._can_access_command(interaction, command):
-                    await interaction.response.send_message(
-                        "⛔ You don't have permission to view this command.",
-                        ephemeral=True
-                    )
-                    return
-                
-                embed = self._generate_command_embed(command)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-            else:
-                await interaction.response.send_message(
-                    f"❌ Command `{command_name}` not found.",
-                    ephemeral=True
-                )
-        else:
-            # Show all available commands
-            embed = self._generate_all_commands_embed(interaction)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Add the dropdown to the view
+        self.add_item(HelpDropdown(self.bot))
 
-    def _generate_all_commands_embed(self, interaction: discord.Interaction) -> discord.Embed:
-        """Generate embed showing all accessible commands"""
-        embed = discord.Embed(
-            title="📚 Bot Command Help",
-            description="Use `/helpme [command]` for detailed command information",
-            color=0x00ff00
-        )
-
-        # Organize commands by cog
-        for cog_name, cog in self.bot.cogs.items():
-            if cog_name == "AdvancedHelp":  # Skip help cog itself
+# This is the dropdown menu itself
+class HelpDropdown(discord.ui.Select):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        # Create a list of options for the dropdown
+        # It dynamically finds all cogs and lists them
+        options = [
+            discord.SelectOption(label="Home", description="Return to the main help menu.", emoji="🏠")
+        ]
+        
+        for cog_name, cog in bot.cogs.items():
+            # Hide this HelpCog itself from the list
+            if cog_name == "Help":
                 continue
-
-            # Get slash commands from cog
-            commands = cog.get_app_commands() if hasattr(cog, 'get_app_commands') else []
-            accessible_commands = [
-                f"• `/{cmd.name}` - {cmd.description}"
-                for cmd in commands
-                if self._can_access_command(interaction, cmd)
-            ]
-
-            if accessible_commands:
-                embed.add_field(
-                    name=f"**{cog_name}**",
-                    value="\n".join(accessible_commands),
-                    inline=False
-                )
-
-        embed.set_footer(text="🔒 Restricted commands require special permissions")
-        return embed
-
-    def _generate_command_embed(self, command: app_commands.Command) -> discord.Embed:
-        """Generate detailed embed for a specific command"""
-        embed = discord.Embed(
-            title=f"📖 Command Help: /{command.name}",
-            description=command.description or "No description available",
-            color=0x0099ff
+            # Only add the cog if it has application commands
+            if cog.get_app_commands():
+                options.append(discord.SelectOption(
+                    label=cog_name,
+                    description=cog.description or "Click to see commands.",
+                    emoji="🧩" # You can assign emojis to your cogs
+                ))
+        
+        super().__init__(
+            placeholder="Select a category to see its commands...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
 
-        # Add parameters if any
-        if command.parameters:
-            params = []
-            for param in command.parameters:
-                required = "Required" if param.required else "Optional"
-                param_info = f"`{param.name}` ({required})"
-                if param.description:
-                    param_info += f": {param.description}"
-                params.append(param_info)
+    async def callback(self, interaction: discord.Interaction):
+        """This function is called when a user selects an option from the dropdown."""
+        
+        # The selected option's label (e.g., "General", "Moderation")
+        selected_cog_name = self.values[0]
+        
+        # If the user selects "Home"
+        if selected_cog_name == "Home":
+            await interaction.response.edit_message(embed=HelpCog.create_main_embed(self.bot))
+            return
             
+        # Get the actual cog object from the bot
+        cog = self.bot.get_cog(selected_cog_name)
+        if not cog:
+            # This should ideally not happen if the dropdown is generated correctly
+            await interaction.response.edit_message(content="Error: Could not find this category.", embed=None)
+            return
+
+        # Create a new embed for the selected cog
+        embed = discord.Embed(
+            title=f"🧩 {cog.qualified_name} Commands",
+            description=cog.description or "Here are the available commands in this category.",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f"Use /help <command> for more info on a command.")
+
+        # Add a field for each command in the cog
+        for command in cog.get_app_commands():
             embed.add_field(
-                name="🔧 Parameters",
-                value="\n".join(params) or "No parameters",
+                name=f"`/{command.name}`",
+                value=command.description or "No description provided.",
                 inline=False
             )
+        
+        # Edit the original message with the new embed
+        await interaction.response.edit_message(embed=embed)
 
-        # Add permissions notice
-        if self._is_restricted_command(command):
-            embed.add_field(
-                name="⚠️ Permissions",
-                value="This command requires special privileges",
-                inline=False
-            )
 
+# The main Cog class
+class Help(commands.Cog):
+    """
+    The central help command that displays all available commands.
+    """
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @staticmethod
+    def create_main_embed(bot: commands.Bot):
+        """Creates the initial 'home' embed for the help command."""
+        embed = discord.Embed(
+            title="Help Menu",
+            description=(
+                f"Welcome to the help menu for **{bot.user.name}**!\n"
+                "Please select a category from the dropdown below to see its commands."
+            ),
+            color=discord.Color.dark_embed()
+        )
+        embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else None)
+        embed.set_footer(text="This bot is powered by slash commands.")
         return embed
 
-    def _can_access_command(self, interaction: discord.Interaction, command: app_commands.Command) -> bool:
-        """Check if user has access to a command"""
-        # Check for restricted cogs
-        if self._is_restricted_command(command):
-            return self._has_staff_role(interaction.user)
-        return True
+    @app_commands.command(name="help", description="Displays a list of all available commands.")
+    async def help_command(self, interaction: discord.Interaction):
+        """The main slash command for help."""
+        embed = self.create_main_embed(self.bot)
+        view = HelpView(self.bot)
+        # Send the initial message with the dropdown. `ephemeral=True` makes it only visible to the user.
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    def _is_restricted_command(self, command: app_commands.Command) -> bool:
-        """Check if command belongs to a restricted cog"""
-        if command.binding and command.binding.qualified_name == "AIAutoMod":
-            return True
-        return False
 
-    def _has_staff_role(self, user: discord.Member) -> bool:
-        """Check if user has staff role"""
-        staff_roles = {"Admin", "Discord Moderator", "Staff"}
-        return any(role.name in staff_roles for role in user.roles)
-
-async def setup(bot):
-    await bot.add_cog(AdvancedHelp(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Help(bot))
